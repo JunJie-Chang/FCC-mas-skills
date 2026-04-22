@@ -47,6 +47,9 @@ AGENT_TYPES = {
     "word_count":      "字數統計",
 }
 
+# Types excluded from Haiku auto-classification; must be specified via --type.
+_MANUAL_ONLY_TYPES = {"verbal_cleanup"}
+
 
 # ── Task structure ────────────────────────────────────────────────────────────
 
@@ -88,8 +91,9 @@ def parse_tasks(
     """
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+    auto_types = {k: v for k, v in AGENT_TYPES.items() if k not in _MANUAL_ONLY_TYPES}
     agent_type_list = "\n".join(
-        f'  "{k}": {v}' for k, v in AGENT_TYPES.items()
+        f'  "{k}": {v}' for k, v in auto_types.items()
     )
 
     force_note = (
