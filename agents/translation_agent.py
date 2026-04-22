@@ -78,14 +78,21 @@ def _parse_json(text: str):
 
 
 def _read_body_file(path: str) -> str:
-    """Read body text from a .txt or .docx file."""
+    """Read body text from .txt, .docx, or an image/PDF (OCR via Claude Vision)."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"找不到檔案：{path}")
-    if p.suffix.lower() == ".docx":
+    suffix = p.suffix.lower()
+    if suffix == ".docx":
         from docx import Document
         doc = Document(str(p))
         return "\n".join(para.text for para in doc.paragraphs if para.text.strip())
+    if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".pdf"}:
+        from utils.ocr import extract_text
+        print(f"OCR 中：{p.name}")
+        text = extract_text(str(p))
+        print(f"  OCR 完成，擷取 {len(text)} 字元")
+        return text
     return p.read_text(encoding="utf-8")
 
 
@@ -122,7 +129,7 @@ def translate(state: TranslationState) -> dict:
     )
 
     from utils.cost_tracker import tracker
-    tracker.record_claude(config.LLM_MAIN, message.usage.input_tokens, message.usage.output_tokens)
+    tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
 
     raw = next((b.text for b in message.content if hasattr(b, "text")), "")
     return {"translation": _parse_json(raw)}

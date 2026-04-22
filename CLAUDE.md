@@ -31,6 +31,11 @@ python3.13 main.py --audio ... --intern "Justin" --mode medium   # 延伸分析�
 python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin
 # → 貼文章，輸入 END + Enter 結束
 
+# 翻譯 + OCR（圖片或 PDF，例如 iPhone AirDrop 截圖）
+python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --image ~/Downloads/IMG_xxxx.JPG
+python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --pdf ~/Downloads/article.pdf
+# PDF 需先安裝：pip install pymupdf
+
 # 直接跑單一 agent
 python3.13 agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
 ```
@@ -63,7 +68,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 |---|---|---|
 | `company_info` | `agents/company_info_agent.py` | 公司/機構研究，4-node graph |
 | `person_info` | `agents/person_info_agent.py` | 人物背景，4-node graph |
-| `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text） |
+| `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions） |
 | `speech_ppt` | `agents/speech_ppt_agent.py` | 簡報研究，需 OPENAI_API_KEY |
@@ -96,10 +101,19 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 - **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁
 - **Medium mode**：section 數量不限，可延伸分析
 
+### OCR（`utils/ocr.py`）
+`extract_text(path)` — 圖片或 PDF → 純文字，供 translation agent 使用：
+- 圖片（.jpg/.jpeg/.png/.gif/.webp）：base64 → Claude Haiku Vision
+- PDF：PyMuPDF 逐頁轉 PNG → 逐頁 OCR 合併
+- 自動壓縮超過 3.6MB 的圖片（base64 後不超過 Claude 的 5MB 上限）
+- OCR prompt 設計為「純輸出文字，不評論」，避免模型拒絕有版權內容
+
 ### Cost Tracking
 `utils/cost_tracker.py` singleton `tracker`：
 - agent 內呼叫 `tracker.record_claude()` / `tracker.record_tavily()` 記錄
+- `record_claude()` 必須傳入實際使用的 model（`LLM_FAST` 或 `LLM_MAIN`），不能混用
 - `main.py` 每個任務完成後呼叫 `tracker.print_task_summary()`（印當前任務費用）
+- `translate.py` 直接執行時同樣呼叫 `print_task_summary()`
 - Session 結束呼叫 `tracker.print_summary()`（印總計）
 
 ## 尚未建置
