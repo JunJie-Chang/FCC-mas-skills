@@ -179,7 +179,6 @@ def generate_report(state: CompanyInfoState) -> dict:
    - type "paragraph"：適合分析性、敘述性內容（用 content 字串）
 4. 語言：繁體中文，保留英文專有名詞（公司名、人名、產品名）；不要在任何名詞後加括號標注其他語言的原文或譯名（例如不要寫「環球集團（Global Group）」或「芽莊（Nha Trang）」，直接寫名稱本身）
 5. 精簡準確，不要堆砌廢話；不要在報告內容中提及任務指令的措辭、比喻或身份設定（例如不要出現「類似麥肯錫」、「根據您的要求」等）
-6. 引用規則：每當文中出現具體數字（金額、百分比、排名、面積、人數等統計數字），在該數字後標 [N]（N 從 1 開始的整數），並在 JSON 最外層加入 "references" 陣列，每條格式為 {{"num": N, "title": "來源標題", "url": "來源網址"}}。URL 必須取自上方搜尋資料「來源」欄位的原始網址，不可捏造。若某數字無法確認來源，不標引用號。
 {mode_rules}
 
 JSON 格式：
@@ -196,10 +195,6 @@ JSON 格式：
       "type": "paragraph",
       "content": "段落內容..."
     }}
-  ],
-  "references": [
-    {{"num": 1, "title": "來源標題", "url": "https://..."}},
-    {{"num": 2, "title": "來源標題", "url": "https://..."}}
   ]
 }}
 """
@@ -230,17 +225,15 @@ def format_output(state: CompanyInfoState) -> dict:
     subdir = state.get("subdir", "adhoc")
 
     # Build Word document
-    references = report.get("references", [])
     builder = WordBuilder(report["title"], task_date, intern)
     for section in report.get("sections", []):
         builder.add_heading(section["heading"])
         if section["type"] == "bullets":
             for item in section.get("items", []):
-                builder.add_bullet(item, references=references)
+                builder.add_bullet(item)
         else:
-            builder.add_paragraph(section.get("content", ""), references=references)
+            builder.add_paragraph(section.get("content", ""))
         builder.add_blank_line()
-    builder.add_references(references)
 
     # Generate filename and save
     # Use dot-separated date for filename (YYYY.MM.DD)

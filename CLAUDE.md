@@ -107,6 +107,15 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 - **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁
 - **Medium mode**：section 數量不限，可延伸分析
 
+### Word 輸出不含 references
+`company_info` / `person_info` 的 Word 文件**不含**內文引用標記（`[N]`）和「參考來源」section。來源資訊只存於 `.log` sidecar，不出現在文件裡。`WordBuilder.add_references()` 方法仍存在於 formatter，但這兩個 agent 不呼叫它。
+
+### confirm() 的範圍限制
+`planner.confirm()` 展示的是 Haiku 解析出的 `task.instruction`，讓使用者在執行前確認或修改。**Tavily 搜尋 queries 是在 confirm 之後、agent Node 1 內部才生成**，使用者看不到。若 query 生成跑偏（如研究對象被誤解為產業生態），只能在 confirm 階段透過修改 instruction 間接影響。
+
+### verbal_cleanup 必須手動指定
+`verbal_cleanup` 在 `_MANUAL_ONLY_TYPES`，Haiku 不會自動分類到這個 type。必須用 `--type verbal_cleanup` 明確指定，否則會被分類成其他 agent。
+
 ### OCR（`utils/ocr.py`）
 `extract_text(path)` — 圖片或 PDF → 純文字，供 translation agent 使用：
 - 圖片（.jpg/.jpeg/.png/.gif/.webp）：base64 → Claude Haiku Vision
