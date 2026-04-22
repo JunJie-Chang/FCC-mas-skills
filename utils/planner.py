@@ -37,13 +37,14 @@ import config
 # Keep in sync with router.py
 
 AGENT_TYPES = {
-    "company_info": "公司/機構背景調查",
-    "person_info":  "人物背景調查",
-    "translation":  "文章或文件翻譯",
-    "letter":       "口述信件整理（音檔）",
-    "meeting":      "會議記錄整理（音檔）",
-    "podcast":      "Podcast 研究題目搜尋",
-    "word_count":   "字數統計",
+    "company_info":    "公司/機構背景調查",
+    "person_info":     "人物背景調查",
+    "translation":     "文章或文件翻譯",
+    "letter":          "口述信件整理（音檔）",
+    "meeting":         "會議記錄整理（音檔）",
+    "verbal_cleanup":  "口述清稿（去除廢話與開頭語）",
+    "podcast":         "Podcast 研究題目搜尋",
+    "word_count":      "字數統計",
 }
 
 

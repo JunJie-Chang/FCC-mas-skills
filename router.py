@@ -81,6 +81,10 @@ def dispatch(
         from agents.dictation_agent import run
         return run(**kwargs)
 
+    elif agent_type == "verbal_cleanup":
+        from agents.verbal_cleanup_agent import run
+        return run(**kwargs)
+
     elif agent_type == "speech_ppt":
         from agents.speech_ppt_agent import run
         return run(speech_topic=task.instruction, intern_name=intern_name,
