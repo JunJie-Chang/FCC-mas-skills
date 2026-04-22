@@ -69,8 +69,9 @@ def dispatch(
                 source=parsed.get("source", ""),
                 body_text=parsed["body_text"],
                 intern_name=intern_name,
+                pub_date=parsed.get("pub_date"),
                 task_date=task_date,
-                subdir=subdir,
+                subdir=resolved_subdir,
             )
         except Exception:
             raise ValueError(

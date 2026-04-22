@@ -73,7 +73,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 |---|---|---|
 | `company_info` | `agents/company_info_agent.py` | 公司/機構研究，4-node graph |
 | `person_info` | `agents/person_info_agent.py` | 人物背景，4-node graph |
-| `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text）；`--body-file` 支援 .jpg/.png/.pdf OCR |
+| `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
 | `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions） |
