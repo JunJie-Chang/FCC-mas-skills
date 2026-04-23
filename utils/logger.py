@@ -41,6 +41,7 @@ class AgentLogger:
         self._intern = intern_name if isinstance(intern_name, str) else ", ".join(intern_name)
         self._queries: list[str] = []
         self._sources: list[dict] = []   # {"query": str, "results": [{"title","url","score"}]}
+        self._financial_data: dict = {}  # {"ticker": str, tool_id: data_dict, ...}
         self._output_path: str = ""
         self._started = datetime.now()
 
@@ -65,6 +66,13 @@ class AgentLogger:
                 for r in results
             ],
         })
+
+    def add_financial_data(self, financial_data: dict) -> None:
+        """
+        Record structured financial data fetched from yfinance.
+        financial_data format: {"ticker": str, tool_id: data_dict, ...}
+        """
+        self._financial_data = financial_data
 
     def set_output_path(self, path: Union[str, Path]) -> None:
         self._output_path = str(path)
@@ -120,6 +128,23 @@ class AgentLogger:
                 for j, r in enumerate(entry["results"], 1):
                     lines.append(f"  {j}. {r['title']}")
                     lines.append(f"     {r['url']}  | score={r['score']:.3f}")
+            lines.append("")
+
+        if self._financial_data:
+            import json
+            ticker = self._financial_data.get("ticker", "unknown")
+            lines.append(f"--- Financial Data (yfinance) ---")
+            lines.append(f"Ticker: {ticker}")
+            for tool_id, data in self._financial_data.items():
+                if tool_id == "ticker":
+                    continue
+                lines.append(f"[{tool_id}]")
+                if isinstance(data, dict) and "error" in data:
+                    lines.append(f"  ERROR: {data['error']}")
+                else:
+                    dumped = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+                    for line in dumped.splitlines():
+                        lines.append(f"  {line}")
             lines.append("")
 
         lines.append("--- Output ---")

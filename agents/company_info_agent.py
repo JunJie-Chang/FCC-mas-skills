@@ -340,6 +340,8 @@ def format_output(state: CompanyInfoState) -> dict:
     logger.set_queries(state["search_queries"])
     for entry in state["search_results"]:
         logger.add_search_result(entry["query"], entry["results"])
+    if state.get("financial_data"):
+        logger.add_financial_data(state["financial_data"])
     log_path = logger.save(output_path)
 
     return {
