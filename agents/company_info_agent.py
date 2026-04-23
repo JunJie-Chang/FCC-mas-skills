@@ -143,19 +143,20 @@ def check_financial_need(state: CompanyInfoState) -> dict:
 回答規則：
 - Q1：任務對象是否包含上市櫃公司（股票市場中可查到的公司）？回答 "Y" 或 "N"
 - Q2：任務是否需要財務市場資料？若是，從工具清單中選出需要的 id（可複選）；若否或 Q1=N，回答空陣列
+- company_name：若 Q1=Y，填入最適合用來搜尋 ticker 的公司名稱（優先用英文，例如 "Tesla" 而非 "特斯拉"）；Q1=N 則填空字串
 - 只在任務明確需要財務數據時才選工具；一般公司介紹、業務研究不需要
 - 回傳純 JSON，不要多餘說明
 
 格式：
-{{"q1": "Y", "q2": ["stock_price", "key_metrics"]}}
+{{"q1": "Y", "company_name": "Tesla", "q2": ["stock_price", "key_metrics"]}}
 或
-{{"q1": "N", "q2": []}}
+{{"q1": "N", "company_name": "", "q2": []}}
 """
 
     client = _get_client()
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=128,
+        max_tokens=200,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -164,11 +165,12 @@ def check_financial_need(state: CompanyInfoState) -> dict:
 
     try:
         check = _parse_json(message.content[0].text)
-        # Normalise: ensure q2 is always a list
         if not isinstance(check.get("q2"), list):
             check["q2"] = []
+        if "company_name" not in check:
+            check["company_name"] = ""
     except Exception:
-        check = {"q1": "N", "q2": []}
+        check = {"q1": "N", "company_name": "", "q2": []}
 
     return {"financial_check": check}
 
@@ -183,11 +185,11 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
     """
     from utils.financial_tools import fetch_all, resolve_ticker
 
-    instruction = state["task_instruction"]
     tools = state["financial_check"].get("q2", [])
+    company_name = state["financial_check"].get("company_name") or state["task_instruction"][:40]
 
-    print(f"[financial_tools] 解析 ticker：{instruction[:60]}…")
-    symbol = resolve_ticker(instruction)
+    print(f"[financial_tools] 解析 ticker：{company_name}…")
+    symbol = resolve_ticker(company_name)
 
     if not symbol:
         print("[financial_tools] ⚠ 找不到對應 ticker，跳過財務資料抓取")
