@@ -249,13 +249,13 @@ def generate_report(state: CompanyInfoState) -> dict:
     mode = state.get("mode", "short")
     if mode == "short":
         mode_rules = """\
-6. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景資訊
-7. 報告結構精簡：1-3 個 section，每個 bullets section 最多 6 條，paragraph 最多 150 字
-8. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
+7. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景資訊
+8. 報告結構精簡：1-3 個 section，每個 bullets section 最多 6 條，paragraph 最多 150 字
+9. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
     else:
         mode_rules = """\
-6. 【Medium 模式】可適度補充相關背景與延伸分析，section 數量不限
-7. 確保資訊完整、分析深度足夠"""
+7. 【Medium 模式】可適度補充相關背景與延伸分析，section 數量不限
+8. 確保資訊完整、分析深度足夠"""
 
     prompt = f"""你是 FCC Partners 的商業研究助理。根據搜尋資料，針對以下任務產出一份繁體中文報告。
 
@@ -272,6 +272,7 @@ def generate_report(state: CompanyInfoState) -> dict:
    - type "paragraph"：適合分析性、敘述性內容（用 content 字串）
 4. 語言：繁體中文，保留英文專有名詞（公司名、人名、產品名）；不要在任何名詞後加括號標注其他語言的原文或譯名（例如不要寫「環球集團（Global Group）」或「芽莊（Nha Trang）」，直接寫名稱本身）
 5. 精簡準確，不要堆砌廢話；不要在報告內容中提及任務指令的措辭、比喻或身份設定（例如不要出現「類似麥肯錫」、「根據您的要求」等）
+6. 財務數字優先採用結構化財務資料（yfinance）；Tavily 的財務數字僅作為背景參考，若與結構化資料矛盾，以結構化資料為準
 {mode_rules}
 
 JSON 格式：
