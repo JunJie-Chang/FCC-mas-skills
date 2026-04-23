@@ -44,8 +44,9 @@ class CompanyInfoState(TypedDict):
     mode: str                              # "short" | "medium"
     search_queries: list[str]
     search_results: list[dict]             # [{query, results:[{title,url,content,score}]}]
-    financial_check: dict                  # {"q1": "Y"|"N", "q2": [tool_ids] | []}
+    financial_check: dict                  # {"q1":"Y"|"N","company_name":str,"q2":[tool_ids],"q3":{"needed":"Y"|"N","sector":str,"country":str}}
     financial_data: dict                   # {"ticker": str, tool_id: data_dict, ...}
+    sector_data: dict                      # FinanceDatabase sector scan result
     report: dict                           # {title, sections:[{heading,type,items|content}]}
     output_path: str
     log_path: str
@@ -127,36 +128,39 @@ def check_financial_need(state: CompanyInfoState) -> dict:
     Q2: Which financial tools are needed? (subset of TOOL_REGISTRY keys, or [])
     Both must be Y/non-empty to trigger fetch_financial_data.
     """
-    from utils.financial_tools import TOOL_DESCRIPTIONS
+    from utils.financial_tools import YFINANCE_TOOL_DESCRIPTIONS, SECTOR_TOOL_DESCRIPTIONS
 
-    tool_menu = "\n".join(
-        f'- "{tid}": {desc}' for tid, desc in TOOL_DESCRIPTIONS.items()
-    )
+    yf_menu = "\n".join(f'- "{tid}": {desc}' for tid, desc in YFINANCE_TOOL_DESCRIPTIONS.items())
+    sector_menu = "\n".join(f'- "{tid}": {desc}' for tid, desc in SECTOR_TOOL_DESCRIPTIONS.items())
 
-    prompt = f"""你是一個任務分析助理。根據以下任務指令，回答兩個問題。
+    prompt = f"""你是一個任務分析助理。根據以下任務指令，回答三個問題。
 
 任務指令：{state['task_instruction']}
 
-可用財務資料工具：
-{tool_menu}
+【Q2 可用工具 — 針對特定上市公司（yfinance）】
+{yf_menu}
+
+【Q3 可用工具 — 針對產業 / 地區掃描（FinanceDatabase）】
+{sector_menu}
 
 回答規則：
-- Q1：任務對象是否包含上市櫃公司（股票市場中可查到的公司）？回答 "Y" 或 "N"
-- Q2：任務是否需要財務市場資料？若是，從工具清單中選出需要的 id（可複選）；若否或 Q1=N，回答空陣列
-- company_name：若 Q1=Y，填入最適合用來搜尋 ticker 的公司名稱（優先用英文，例如 "Tesla" 而非 "特斯拉"）；Q1=N 則填空字串
-- 只在任務明確需要財務數據時才選工具；一般公司介紹、業務研究不需要
+- Q1：任務對象是否包含特定上市櫃公司？回答 "Y" 或 "N"
+- Q2：若 Q1=Y，任務是否需要該公司的財務市場資料？從 Q2 工具清單選出需要的 id（可複選）；否則空陣列
+- company_name：若 Q1=Y，填最適合搜尋 ticker 的名稱（優先英文）；否則空字串
+- Q3：任務是否需要產業 / 地區的公司清單或掃描？若是，填 needed=Y 並指定 sector（英文產業名）與 country（英文國名，不限定則填 null）；否則 needed=N
+- Q2 與 Q3 互相獨立，可同時觸發
+- 只在任務明確需要時才選工具；一般研究不需要
 - 回傳純 JSON，不要多餘說明
 
-格式：
-{{"q1": "Y", "company_name": "Tesla", "q2": ["stock_price", "key_metrics"]}}
-或
-{{"q1": "N", "company_name": "", "q2": []}}
+格式範例：
+{{"q1": "Y", "company_name": "Tesla", "q2": ["stock_price", "key_metrics"], "q3": {{"needed": "N", "sector": "", "country": null}}}}
+{{"q1": "N", "company_name": "", "q2": [], "q3": {{"needed": "Y", "sector": "Electric Vehicles", "country": "United States"}}}}
 """
 
     client = _get_client()
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=200,
+        max_tokens=300,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -169,8 +173,10 @@ def check_financial_need(state: CompanyInfoState) -> dict:
             check["q2"] = []
         if "company_name" not in check:
             check["company_name"] = ""
+        if not isinstance(check.get("q3"), dict):
+            check["q3"] = {"needed": "N", "sector": "", "country": None}
     except Exception:
-        check = {"q1": "N", "company_name": "", "q2": []}
+        check = {"q1": "N", "company_name": "", "q2": [], "q3": {"needed": "N", "sector": "", "country": None}}
 
     return {"financial_check": check}
 
@@ -198,6 +204,22 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
     print(f"[financial_tools] ticker = {symbol}，抓取：{tools}")
     data = fetch_all(symbol, tools)
     return {"financial_data": data}
+
+
+# ── Node 1d: fetch_sector_data ────────────────────────────────────────────────
+
+def fetch_sector_data(state: CompanyInfoState) -> dict:
+    """
+    Run FinanceDatabase sector scan based on Q3 classification.
+    No-op (returns empty dict) when Q3.needed != "Y".
+    """
+    q3 = state.get("financial_check", {}).get("q3", {})
+    if q3.get("needed") != "Y" or not q3.get("sector"):
+        return {"sector_data": {}}
+
+    from utils.financial_tools import fetch_sector_data as _fetch
+    data = _fetch(q3)
+    return {"sector_data": data}
 
 
 # ── Node 2: run_search ────────────────────────────────────────────────────────
@@ -236,12 +258,17 @@ def generate_report(state: CompanyInfoState) -> dict:
             context_parts.append(r["content"])
             context_parts.append("")
 
-    # Append structured financial data if available
+    import json as _json
     fin = state.get("financial_data") or {}
     if fin and len(fin) > 1:   # more than just "ticker" key
-        import json as _json
         context_parts.append("[結構化財務資料（來自 yfinance）]")
         context_parts.append(_json.dumps(fin, ensure_ascii=False, default=str))
+        context_parts.append("")
+
+    sec = state.get("sector_data") or {}
+    if sec and "companies" in sec:
+        context_parts.append("[產業公司清單（來自 FinanceDatabase）]")
+        context_parts.append(_json.dumps(sec, ensure_ascii=False, default=str))
         context_parts.append("")
 
     context = "\n".join(context_parts)
@@ -342,6 +369,8 @@ def format_output(state: CompanyInfoState) -> dict:
         logger.add_search_result(entry["query"], entry["results"])
     if state.get("financial_data"):
         logger.add_financial_data(state["financial_data"])
+    if state.get("sector_data"):
+        logger.add_sector_data(state["sector_data"])
     log_path = logger.save(output_path)
 
     return {
@@ -352,30 +381,21 @@ def format_output(state: CompanyInfoState) -> dict:
 
 # ── Graph ─────────────────────────────────────────────────────────────────────
 
-def _needs_financial_fetch(state: CompanyInfoState) -> str:
-    check = state.get("financial_check") or {}
-    if check.get("q1") == "Y" and check.get("q2"):
-        return "fetch"
-    return "skip"
-
-
 def build_graph():
     graph = StateGraph(CompanyInfoState)
-    graph.add_node("parse_task",            parse_task)
-    graph.add_node("check_financial_need",  check_financial_need)
-    graph.add_node("fetch_financial_data",  fetch_financial_data)
-    graph.add_node("run_search",            run_search)
-    graph.add_node("generate_report",       generate_report)
-    graph.add_node("format_output",         format_output)
+    graph.add_node("parse_task",           parse_task)
+    graph.add_node("check_financial_need", check_financial_need)
+    graph.add_node("fetch_financial_data", fetch_financial_data)
+    graph.add_node("fetch_sector_data",    fetch_sector_data)
+    graph.add_node("run_search",           run_search)
+    graph.add_node("generate_report",      generate_report)
+    graph.add_node("format_output",        format_output)
 
     graph.set_entry_point("parse_task")
-    graph.add_edge("parse_task", "check_financial_need")
-    graph.add_conditional_edges(
-        "check_financial_need",
-        _needs_financial_fetch,
-        {"fetch": "fetch_financial_data", "skip": "run_search"},
-    )
-    graph.add_edge("fetch_financial_data", "run_search")
+    graph.add_edge("parse_task",           "check_financial_need")
+    graph.add_edge("check_financial_need", "fetch_financial_data")
+    graph.add_edge("fetch_financial_data", "fetch_sector_data")
+    graph.add_edge("fetch_sector_data",    "run_search")
     graph.add_edge("run_search",           "generate_report")
     graph.add_edge("generate_report",      "format_output")
     graph.add_edge("format_output",        END)
@@ -417,6 +437,7 @@ def run(
         "search_results": [],
         "financial_check": {},
         "financial_data": {},
+        "sector_data": {},
         "report": {},
         "output_path": "",
         "log_path": "",

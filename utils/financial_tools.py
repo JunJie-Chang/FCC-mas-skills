@@ -4,22 +4,34 @@ utils/financial_tools.py — Financial data fetchers (yfinance + FinanceDatabase
 Each public function returns a dict. On failure it returns {"error": "<reason>"}
 instead of raising, so the agent can always continue gracefully.
 
-Rate limiting: _CALL_DELAY seconds are inserted between successive yfinance
-requests inside fetch_all() to avoid hitting Yahoo Finance rate limits.
+Tool catalogue split by data source:
+  YFINANCE_TOOL_DESCRIPTIONS  → Q2, triggered when Q1=Y (specific listed company)
+  SECTOR_TOOL_DESCRIPTIONS    → Q3, triggered for industry/sector discovery
+
+Rate limiting: _CALL_DELAY seconds are inserted between successive API calls.
 """
 import time
 import warnings
 from typing import Any
 
-# ── Tool catalogue (shown to Haiku for Q2 classification) ────────────────────
+# ── Q2 tool catalogue — yfinance（specific listed company） ───────────────────
 
-TOOL_DESCRIPTIONS: dict[str, str] = {
+YFINANCE_TOOL_DESCRIPTIONS: dict[str, str] = {
     "stock_price":  "股價（近 3 個月歷史走勢、現價、漲跌幅、52 週高低）",
     "financials":   "財報（最新季度損益表 / 資產負債表 / 現金流量表）",
     "key_metrics":  "估值指標（市值、PE、EV/EBITDA、股息率、Beta…）",
     "holders":      "股東結構（前 10 大機構 / 法人持股）",
     "news":         "近期新聞（Yahoo Finance 最新 5 則標題與連結）",
 }
+
+# ── Q3 tool catalogue — FinanceDatabase（sector / industry discovery） ────────
+
+SECTOR_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "sector_scan":  "產業掃描（列出某產業 / 國家的上市公司清單，含 ticker、交易所、市場）",
+}
+
+# Keep a combined alias for backward compatibility
+TOOL_DESCRIPTIONS = YFINANCE_TOOL_DESCRIPTIONS
 
 _CALL_DELAY = 1.5   # seconds between yfinance API calls
 
@@ -191,18 +203,79 @@ def fetch_news(symbol: str) -> dict:
     return result
 
 
+# ── FinanceDatabase: sector scan ─────────────────────────────────────────────
+
+def fetch_sector_scan(sector: str, country: str = None, limit: int = 30) -> dict:
+    """
+    Search FinanceDatabase for listed companies matching sector + optional country.
+    Returns a list of {name, symbol, exchange, country} dicts.
+    """
+    def _fetch():
+        import financedatabase as fd
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            equities = fd.Equities()
+
+        kwargs: dict = {}
+        if sector:
+            kwargs["industry_group"] = sector
+        if country:
+            kwargs["country"] = country
+
+        df = equities.search(**kwargs) if kwargs else equities.select()
+        if df.empty:
+            # Retry with looser sector match (drop country constraint)
+            if country:
+                df = equities.search(industry_group=sector) if sector else df
+        if df.empty:
+            return {"error": f"no results for sector='{sector}' country='{country}'"}
+
+        cols = [c for c in ["name", "exchange", "country", "currency", "market"] if c in df.columns]
+        records = (
+            df[cols]
+            .dropna(subset=["name"])
+            .head(limit)
+            .reset_index()          # brings ticker symbol into column
+            .rename(columns={"index": "symbol"})
+            .to_dict(orient="records")
+        )
+        return {"sector": sector, "country": country, "companies": records}
+
+    result = _safe(_fetch)
+    if "error" in result:
+        print(f"[financial_tools] ⚠ sector_scan('{sector}', '{country}'): {result['error']}")
+    return result
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 
 TOOL_REGISTRY: dict[str, Any] = {
-    "stock_price": fetch_stock_price,
-    "financials":  fetch_financials,
-    "key_metrics": fetch_key_metrics,
-    "holders":     fetch_holders,
-    "news":        fetch_news,
+    "stock_price":  fetch_stock_price,
+    "financials":   fetch_financials,
+    "key_metrics":  fetch_key_metrics,
+    "holders":      fetch_holders,
+    "news":         fetch_news,
+}
+
+SECTOR_TOOL_REGISTRY: dict[str, Any] = {
+    "sector_scan": fetch_sector_scan,
 }
 
 
-# ── Public batch fetcher ──────────────────────────────────────────────────────
+# ── Public batch fetchers ─────────────────────────────────────────────────────
+
+def fetch_sector_data(q3: dict) -> dict:
+    """
+    Execute FinanceDatabase tools based on Q3 classification output.
+    q3 format: {"needed": "Y", "sector": str, "country": str | null}
+    Returns combined results dict.
+    """
+    sector  = q3.get("sector", "")
+    country = q3.get("country") or None
+    print(f"[financial_tools] sector_scan: sector='{sector}' country='{country}'…")
+    time.sleep(_CALL_DELAY)
+    return fetch_sector_scan(sector, country)
+
 
 def fetch_all(symbol: str, tools: list[str]) -> dict:
     """
