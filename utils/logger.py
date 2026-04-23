@@ -42,6 +42,7 @@ class AgentLogger:
         self._queries: list[str] = []
         self._sources: list[dict] = []   # {"query": str, "results": [{"title","url","score"}]}
         self._financial_data: dict = {}  # {"ticker": str, tool_id: data_dict, ...}
+        self._sector_data: dict = {}     # FinanceDatabase sector scan result
         self._output_path: str = ""
         self._started = datetime.now()
 
@@ -66,6 +67,10 @@ class AgentLogger:
                 for r in results
             ],
         })
+
+    def add_sector_data(self, sector_data: dict) -> None:
+        """Record FinanceDatabase sector scan results."""
+        self._sector_data = sector_data
 
     def add_financial_data(self, financial_data: dict) -> None:
         """
@@ -128,6 +133,17 @@ class AgentLogger:
                 for j, r in enumerate(entry["results"], 1):
                     lines.append(f"  {j}. {r['title']}")
                     lines.append(f"     {r['url']}  | score={r['score']:.3f}")
+            lines.append("")
+
+        if self._sector_data and "companies" in self._sector_data:
+            import json
+            lines.append("--- Sector Data (FinanceDatabase) ---")
+            lines.append(f"Sector:  {self._sector_data.get('sector', '')}")
+            lines.append(f"Country: {self._sector_data.get('country') or 'all'}")
+            lines.append(f"Results: {len(self._sector_data.get('companies', []))} companies")
+            dumped = json.dumps(self._sector_data.get("companies", []), ensure_ascii=False, default=str, indent=2)
+            for line in dumped.splitlines():
+                lines.append(f"  {line}")
             lines.append("")
 
         if self._financial_data:
