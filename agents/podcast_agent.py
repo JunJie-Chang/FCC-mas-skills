@@ -101,6 +101,35 @@ def _is_blocked(url: str) -> bool:
     return any(domain == b or domain.endswith("." + b) for b in _BLOCKED_DOMAINS)
 
 
+def _scrape(url: str) -> dict:
+    """
+    Scrape full text + metadata via trafilatura.
+    Returns dict: {text, title, date, publication}
+    Returns empty dict on failure.
+    """
+    try:
+        import trafilatura
+        downloaded = trafilatura.fetch_url(url)
+        if not downloaded:
+            return {}
+        result = trafilatura.bare_extraction(
+            downloaded,
+            include_comments=False,
+            include_tables=False,
+            favor_precision=True,
+        )
+        if not result or not result.get("text"):
+            return {}
+        return {
+            "text":        result.get("text", ""),
+            "title":       result.get("title", ""),
+            "date":        result.get("date", ""),
+            "publication": result.get("sitename", ""),
+        }
+    except Exception:
+        return {}
+
+
 
 
 def _is_traditional_chinese(text: str) -> bool:
@@ -294,7 +323,6 @@ def search_and_fetch(state: PodcastState) -> dict:
         print(f"  搜尋：{query}")
         results = search(query, max_results=_RESULTS_PER_QUESTION + _SEARCH_FETCH_EXTRA)
         from utils.cost_tracker import tracker
-        from utils.search import fetch_full_content
         tracker.record_tavily(1)
 
         items = []
@@ -315,16 +343,17 @@ def search_and_fetch(state: PodcastState) -> dict:
                 continue
             seen_urls.add(url)
 
-            # Fetch full text via Tavily extract
-            raw_content = fetch_full_content(url)
-            tracker.record_tavily(1)
-            if not raw_content:
-                print(f"    [skip no content] {r['title'][:50]}")
-                continue
-            body  = raw_content
-            title = r["title"]
-            meta  = {}
-            scrape_src = "tavily_extract"
+            # Scrape full text + metadata
+            meta = _scrape(url)
+            if meta and meta.get("text"):
+                body  = meta["text"]
+                title = meta.get("title") or r["title"]
+                scrape_src = "scraped"
+            else:
+                body  = r["content"]   # Tavily snippet fallback
+                title = r["title"]
+                meta  = {}
+                scrape_src = "snippet"
 
             # Remove web UI artifacts
             body = _clean_body(body)
