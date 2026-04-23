@@ -43,10 +43,15 @@ class CostTracker:
         self._ckpt_claude: int = 0
         self._ckpt_whisper: float = 0.0
         self._ckpt_tavily: int = 0
+        self._ckpt_dalle: int = 0
+        self._warned_models: set = set()
 
     # ── Record ────────────────────────────────────────────────────────────────
 
     def record_claude(self, model: str, input_tokens: int, output_tokens: int) -> None:
+        if model not in _CLAUDE_PRICES and model not in self._warned_models:
+            print(f"[cost] ⚠ unknown model {model!r}，用 _default 價格估算")
+            self._warned_models.add(model)
         prices = _CLAUDE_PRICES.get(model, _CLAUDE_PRICES["_default"])
         cost = (input_tokens * prices["in"] + output_tokens * prices["out"]) / 1_000_000
         self._claude.append({
@@ -72,22 +77,27 @@ class CostTracker:
         task_claude  = self._claude[self._ckpt_claude:]
         task_whisper = self._whisper_sec - self._ckpt_whisper
         task_tavily  = self._tavily_calls - self._ckpt_tavily
+        task_dalle   = self._dalle_images - self._ckpt_dalle
 
         self._ckpt_claude  = len(self._claude)
         self._ckpt_whisper = self._whisper_sec
         self._ckpt_tavily  = self._tavily_calls
+        self._ckpt_dalle   = self._dalle_images
 
         in_tok     = sum(r["in_tok"]  for r in task_claude)
         out_tok    = sum(r["out_tok"] for r in task_claude)
         claude_usd = sum(r["cost"]    for r in task_claude)
         whisper_usd = task_whisper * _WHISPER_PER_SECOND
-        total_usd  = claude_usd + whisper_usd
+        dalle_usd  = task_dalle * _DALLE3_PER_IMAGE
+        total_usd  = claude_usd + whisper_usd + dalle_usd
 
         parts = []
         if task_claude:
             parts.append(f"Claude {in_tok:,}in+{out_tok:,}out tok  ${claude_usd:.4f}")
         if task_whisper:
             parts.append(f"Whisper {task_whisper/60:.1f}min  ${whisper_usd:.4f}")
+        if task_dalle:
+            parts.append(f"DALL-E {task_dalle} img  ${dalle_usd:.4f}")
         if task_tavily:
             parts.append(f"Tavily {task_tavily} calls")
         if parts:

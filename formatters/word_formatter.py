@@ -376,7 +376,7 @@ class WordBuilder:
     def _attach_comment(self, para, comment_text: str) -> None:
         """Attach a Word comment bubble to an existing paragraph."""
         from lxml import etree
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         cid = self._comment_counter
         self._comment_counter += 1
@@ -393,7 +393,7 @@ class WordBuilder:
         comment_el.set(w("id"), cid_str)
         comment_el.set(w("author"), "FCC MAS")
         comment_el.set(
-            w("date"), datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            w("date"), datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         )
         comment_el.set(w("initials"), "F")
 

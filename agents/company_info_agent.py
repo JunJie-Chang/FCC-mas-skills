@@ -199,7 +199,7 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
 
     if not symbol:
         print("[financial_tools] ⚠ 找不到對應 ticker，跳過財務資料抓取")
-        return {"financial_data": {}}
+        return {"financial_data": {"_ticker_error": f"ticker resolution failed for {company_name!r}"}}
 
     print(f"[financial_tools] ticker = {symbol}，抓取：{tools}")
     data = fetch_all(symbol, tools)

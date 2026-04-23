@@ -51,6 +51,9 @@ def _parse_args():
 def main():
     title, source, pub_date, intern, image_path, pdf_path = _parse_args()
 
+    if intern and "," in intern:
+        intern = [n.strip() for n in intern.split(",") if n.strip()]
+
     # ── OCR path ──────────────────────────────────────────────────────────────
     if image_path or pdf_path:
         file_path = image_path or pdf_path
