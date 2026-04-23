@@ -44,6 +44,8 @@ class CompanyInfoState(TypedDict):
     mode: str                              # "short" | "medium"
     search_queries: list[str]
     search_results: list[dict]             # [{query, results:[{title,url,content,score}]}]
+    financial_check: dict                  # {"q1": "Y"|"N", "q2": [tool_ids] | []}
+    financial_data: dict                   # {"ticker": str, tool_id: data_dict, ...}
     report: dict                           # {title, sections:[{heading,type,items|content}]}
     output_path: str
     log_path: str
@@ -116,6 +118,86 @@ def parse_task(state: CompanyInfoState) -> dict:
     return {"search_queries": queries}
 
 
+# ── Node 1b: check_financial_need ────────────────────────────────────────────
+
+def check_financial_need(state: CompanyInfoState) -> dict:
+    """
+    Use Haiku to classify whether the task needs financial market data.
+    Q1: Does the task subject include a listed company? (Y/N)
+    Q2: Which financial tools are needed? (subset of TOOL_REGISTRY keys, or [])
+    Both must be Y/non-empty to trigger fetch_financial_data.
+    """
+    from utils.financial_tools import TOOL_DESCRIPTIONS
+
+    tool_menu = "\n".join(
+        f'- "{tid}": {desc}' for tid, desc in TOOL_DESCRIPTIONS.items()
+    )
+
+    prompt = f"""你是一個任務分析助理。根據以下任務指令，回答兩個問題。
+
+任務指令：{state['task_instruction']}
+
+可用財務資料工具：
+{tool_menu}
+
+回答規則：
+- Q1：任務對象是否包含上市櫃公司（股票市場中可查到的公司）？回答 "Y" 或 "N"
+- Q2：任務是否需要財務市場資料？若是，從工具清單中選出需要的 id（可複選）；若否或 Q1=N，回答空陣列
+- 只在任務明確需要財務數據時才選工具；一般公司介紹、業務研究不需要
+- 回傳純 JSON，不要多餘說明
+
+格式：
+{{"q1": "Y", "q2": ["stock_price", "key_metrics"]}}
+或
+{{"q1": "N", "q2": []}}
+"""
+
+    client = _get_client()
+    message = client.messages.create(
+        model=config.LLM_FAST,
+        max_tokens=128,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    from utils.cost_tracker import tracker
+    tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
+
+    try:
+        check = _parse_json(message.content[0].text)
+        # Normalise: ensure q2 is always a list
+        if not isinstance(check.get("q2"), list):
+            check["q2"] = []
+    except Exception:
+        check = {"q1": "N", "q2": []}
+
+    return {"financial_check": check}
+
+
+# ── Node 1c: fetch_financial_data ─────────────────────────────────────────────
+
+def fetch_financial_data(state: CompanyInfoState) -> dict:
+    """
+    Resolve ticker and fetch financial data for requested tools.
+    Skipped entirely (via conditional edge) when Q1=N or Q2=[].
+    Returns empty dict on ticker resolution failure so the graph continues.
+    """
+    from utils.financial_tools import fetch_all, resolve_ticker
+
+    instruction = state["task_instruction"]
+    tools = state["financial_check"].get("q2", [])
+
+    print(f"[financial_tools] 解析 ticker：{instruction[:60]}…")
+    symbol = resolve_ticker(instruction)
+
+    if not symbol:
+        print("[financial_tools] ⚠ 找不到對應 ticker，跳過財務資料抓取")
+        return {"financial_data": {}}
+
+    print(f"[financial_tools] ticker = {symbol}，抓取：{tools}")
+    data = fetch_all(symbol, tools)
+    return {"financial_data": data}
+
+
 # ── Node 2: run_search ────────────────────────────────────────────────────────
 
 _RESULTS_PER_QUERY = 3   # configurable per agent
@@ -151,6 +233,15 @@ def generate_report(state: CompanyInfoState) -> dict:
             context_parts.append(f"來源：{r['title']} ({r['url']})")
             context_parts.append(r["content"])
             context_parts.append("")
+
+    # Append structured financial data if available
+    fin = state.get("financial_data") or {}
+    if fin and len(fin) > 1:   # more than just "ticker" key
+        import json as _json
+        context_parts.append("[結構化財務資料（來自 yfinance）]")
+        context_parts.append(_json.dumps(fin, ensure_ascii=False, default=str))
+        context_parts.append("")
+
     context = "\n".join(context_parts)
 
     mode = state.get("mode", "short")
@@ -256,18 +347,33 @@ def format_output(state: CompanyInfoState) -> dict:
 
 # ── Graph ─────────────────────────────────────────────────────────────────────
 
+def _needs_financial_fetch(state: CompanyInfoState) -> str:
+    check = state.get("financial_check") or {}
+    if check.get("q1") == "Y" and check.get("q2"):
+        return "fetch"
+    return "skip"
+
+
 def build_graph():
     graph = StateGraph(CompanyInfoState)
-    graph.add_node("parse_task", parse_task)
-    graph.add_node("run_search", run_search)
-    graph.add_node("generate_report", generate_report)
-    graph.add_node("format_output", format_output)
+    graph.add_node("parse_task",            parse_task)
+    graph.add_node("check_financial_need",  check_financial_need)
+    graph.add_node("fetch_financial_data",  fetch_financial_data)
+    graph.add_node("run_search",            run_search)
+    graph.add_node("generate_report",       generate_report)
+    graph.add_node("format_output",         format_output)
 
     graph.set_entry_point("parse_task")
-    graph.add_edge("parse_task", "run_search")
-    graph.add_edge("run_search", "generate_report")
-    graph.add_edge("generate_report", "format_output")
-    graph.add_edge("format_output", END)
+    graph.add_edge("parse_task", "check_financial_need")
+    graph.add_conditional_edges(
+        "check_financial_need",
+        _needs_financial_fetch,
+        {"fetch": "fetch_financial_data", "skip": "run_search"},
+    )
+    graph.add_edge("fetch_financial_data", "run_search")
+    graph.add_edge("run_search",           "generate_report")
+    graph.add_edge("generate_report",      "format_output")
+    graph.add_edge("format_output",        END)
 
     return graph.compile()
 
@@ -304,6 +410,8 @@ def run(
         "mode": mode,
         "search_queries": [],
         "search_results": [],
+        "financial_check": {},
+        "financial_data": {},
         "report": {},
         "output_path": "",
         "log_path": "",
