@@ -49,6 +49,7 @@ python3.13 main.py --audio recording.m4a --type verbal_cleanup --intern "Justin"
 - LangGraph（每個 agent 都是獨立 graph）
 - Anthropic Claude：`LLM_MAIN = claude-opus-4-6`，`LLM_FAST = claude-haiku-4-5-20251001`
 - Tavily（web search）
+- yfinance + FinanceDatabase（財務資料，`utils/financial_tools.py`）
 - OpenAI Whisper（STT，透過 `utils/stt.py`）
 - python-docx（Word 輸出，透過 `formatters/word_formatter.py`）
 
@@ -71,7 +72,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### Agent 清單
 | agent_type | 檔案 | 說明 |
 |---|---|---|
-| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，4-node graph |
+| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，6-node graph（含財務資料層） |
 | `person_info` | `agents/person_info_agent.py` | 人物背景，4-node graph |
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
@@ -79,12 +80,17 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 | `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions） |
 | `speech_ppt` | `agents/speech_ppt_agent.py` | 簡報研究，需 OPENAI_API_KEY |
 
-### Agent 內部結構（company_info / person_info）
-4-node LangGraph：
+### Agent 內部結構
+
+**company_info**（6-node LangGraph）：
 1. `parse_task` — haiku 產生 3-5 個 Tavily 搜尋 query
-2. `run_search` — Tavily 搜尋，每 query 3 筆結果
-3. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換
-4. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+2. `check_financial_need` — haiku Q1/Q2 分類（是否需要財務資料 + 選工具）
+3. `fetch_financial_data`（conditional）— ticker 解析 + yfinance 抓取；Q1=N 或 Q2=[] 時跳過
+4. `run_search` — Tavily 搜尋，每 query 3 筆結果
+5. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換；財務資料注入 context
+6. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+
+**person_info**（4-node LangGraph）：同上的 1 / 4 / 5 / 6，不含財務資料層
 
 ### router → agent 的 mode 傳遞規則
 - `company_info` / `person_info` / `dictation`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
@@ -130,6 +136,25 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 - `main.py` 每個任務完成後呼叫 `tracker.print_task_summary()`（印當前任務費用）
 - `translate.py` 直接執行時同樣呼叫 `print_task_summary()`
 - Session 結束呼叫 `tracker.print_summary()`（印總計）
+
+### Financial Data Layer（`utils/financial_tools.py`）
+`company_info_agent` 在 `parse_task` 之後會執行 Haiku Q1/Q2 分類：
+- **Q1**：任務對象是否為上市櫃公司？(Y/N)
+- **Q2**：從工具清單中選出需要的工具 id（空陣列 = 跳過）
+
+兩個條件都成立才進入 `fetch_financial_data` node：
+1. `resolve_ticker(instruction)` — 先用 yfinance Search，失敗再用 FinanceDatabase
+2. `fetch_all(symbol, tools)` — 依 Q2 清單逐一呼叫，呼叫之間有 `_CALL_DELAY`（預設 1.5s）延遲
+3. 失敗的工具回傳 `{"error": "..."}` 並印警告，不中斷流程
+
+可用工具（新增工具只需在 `TOOL_REGISTRY` 與 `TOOL_DESCRIPTIONS` 加入）：
+- `stock_price` — 近 3 個月股價走勢、現價、52 週高低
+- `financials`  — 最新季度財報（損益 / 資產負債 / 現金流量）
+- `key_metrics` — 估值指標（市值、PE、EV/EBITDA、股息率、Beta）
+- `holders`     — 前 10 大機構股東
+- `news`        — Yahoo Finance 最新 5 則新聞
+
+Financial data 以結構化 JSON 形式注入 `generate_report` context，Opus 自行決定如何引用。
 
 ## 尚未建置
 - `agents/word_count_agent.py` — 字數統計（純文字，不輸出 Word）
