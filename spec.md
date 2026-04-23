@@ -31,8 +31,7 @@ fcc_mas/
 │   ├── person_info_agent.py
 │   ├── translation_agent.py
 │   ├── dictation_agent.py
-│   ├── podcast_agent.py
-│   └── word_count_agent.py
+│   └── podcast_agent.py
 ├── formatters/
 │   ├── word_formatter.py
 │   └── pdf_formatter.py
@@ -127,14 +126,6 @@ Agent 的職責是：
 
 ---
 
-### word_count_agent
-
-**核心概念：輸入文字或檔案，回傳字數。**
-
-輸出：純文字（字數 + 日期 + 經手人），供人抄在便條紙上。
-
----
-
 ## Output Formatters
 
 ### word_formatter.py
@@ -177,7 +168,7 @@ CC 規則從 FCC 工作規範提取，不同任務 CC 不同對象。
 
 ```python
 task = {
-  "task_type": "company_info" | "person_info" | "translation" | "letter" | "meeting" | "podcast" | "word_count",
+  "task_type": "company_info" | "person_info" | "translation" | "letter" | "meeting" | "podcast",
   "input": "...",          # 文字指令、原文、或音檔路徑
   "intern_name": "Justin",
   "priority": "high" | "normal"
@@ -224,9 +215,8 @@ DEFAULT_INTERN_NAME = "Justin"
 7. `agents/translation_agent.py`
 8. `utils/stt.py` → `agents/dictation_agent.py`
 9. `agents/podcast_agent.py`
-10. `agents/word_count_agent.py`
-11. `delivery/email_draft.py`
-12. `router.py` + `main.py`
+10. `delivery/email_draft.py`
+11. `router.py` + `main.py`
 
 ---
 

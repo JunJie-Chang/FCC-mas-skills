@@ -44,7 +44,6 @@ AGENT_TYPES = {
     "meeting":         "會議記錄整理（音檔）",
     "verbal_cleanup":  "口述清稿（去除廢話與開頭語）",
     "podcast":         "Podcast 研究題目搜尋",
-    "word_count":      "字數統計",
 }
 
 # Types excluded from Haiku auto-classification; must be specified via --type.
@@ -89,6 +88,15 @@ def parse_tasks(
     Returns:
         List of PlanTask objects (unconfirmed — pass to confirm() next).
     """
+    # ── Bypass Haiku for "raw-copy" types（如 verbal_cleanup） ─────────────
+    # _MANUAL_ONLY_TYPES 的語意是「原文照搬進 agent，不給 Haiku 改寫」。
+    # 走 planner Haiku 會把 STT 原文濃縮成任務描述，下游 agent 拿到的就不是原文。
+    if force_type in _MANUAL_ONLY_TYPES:
+        preview = raw_instruction.strip().replace("\n", " ")[:30]
+        if len(raw_instruction.strip()) > 30:
+            preview += "..."
+        return [PlanTask(force_type, f"[{force_type}] {preview}", raw_instruction)]
+
     client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     auto_types = {k: v for k, v in AGENT_TYPES.items() if k not in _MANUAL_ONLY_TYPES}

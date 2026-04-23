@@ -39,10 +39,10 @@ python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --pdf ~/Dow
 # 直接跑單一 agent
 python3.13 agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
 
-# Podcast agent 直接執行（--questions 為 JSON array 字串）
+# Podcast agent 直接執行（--questions 用分號分隔，不是 JSON array）
 python3.13 agents/podcast_agent.py \
   --topic "全球媒體產業" \
-  --questions '["問題1", "問題2", ...]' \
+  --questions "問題1; 問題2; 問題3" \
   --intern "Justin"
 
 # 口述清稿（去除廢話與開頭語）
@@ -83,7 +83,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
-| `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions）；全文抓取用 Tavily extract |
+| `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions）；全文抓取用 trafilatura（失敗 fallback 到 Tavily snippet） |
 | `speech_ppt` | `agents/speech_ppt_agent.py` | 簡報研究，需 OPENAI_API_KEY |
 
 ### Agent 內部結構
@@ -132,6 +132,8 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### verbal_cleanup 必須手動指定
 `verbal_cleanup` 在 `_MANUAL_ONLY_TYPES`，Haiku 不會自動分類到這個 type。必須用 `--type verbal_cleanup` 明確指定，否則會被分類成其他 agent。
 
+此外，`parse_tasks()` 對 `_MANUAL_ONLY_TYPES` 的 `force_type` 做 early return：不呼叫 Haiku，直接把原始 `raw_instruction` 原封不動包成一個 `PlanTask`（label 取前 30 字 + `...`）。這保證 verbal_cleanup agent 收到的是完整 STT 原文，不會被 planner Haiku 改寫成摘要。未來若加其他「原文照搬」型 agent，加進 `_MANUAL_ONLY_TYPES` 即自動獲得此行為。
+
 ### OCR（`utils/ocr.py`）
 `extract_text(path)` — 圖片或 PDF → 純文字，供 translation agent 使用：
 - 圖片（.jpg/.jpeg/.png/.gif/.webp）：base64 → Claude Haiku Vision
@@ -172,8 +174,61 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 Financial / sector data 以結構化 JSON 注入 `generate_report` context；財務數字優先採用 yfinance，Tavily 數字僅作背景參考。所有 fetched data 同時寫入 `.log` sidecar（`--- Financial Data ---` / `--- Sector Data ---` 區塊）。
 
 ## 尚未建置
-- `agents/word_count_agent.py` — 字數統計（純文字，不輸出 Word）
 - `delivery/email_draft.py` — email 草稿生成
+- `speech_ppt` 雖有 agent code（`agents/speech_ppt_agent.py`），但尚未接入 `AGENT_TYPES` / planner，只能透過直接 CLI 執行。缺 confirm step、DALL-E 成本可見度、retry 機制
+
+## 已知問題與改進清單（2026-04-23 review）
+
+下列為程式碼靜態審閱後確認的邏輯問題。以**影響範圍**排序，非風格建議。
+
+### 高（已壞或無法觸發功能）
+
+**H1. `speech_ppt` 為未完工 agent，暫不接入 `AGENT_TYPES`**
+- 目前只能透過 `python3.13 agents/speech_ppt_agent.py --topic "..."` CLI 直跑
+- 未接入原因：缺 confirm step（標題定案後才畫圖）、DALL-E 成本不進 task summary、DALL-E 失敗無 retry
+- 保留現狀，待補足後再接入 planner / router 主流程
+
+### 中（間接影響輸出品質 / 維護性）
+
+**M1. `router.py:92, 105` — `podcast` 與 `speech_ppt` 分支用原始 `subdir` 而非 `resolved_subdir`**
+- `router.py:39` 算好的 `resolved_subdir`（agent-specific 預設值）只有 `company_info` / `person_info` / `dictation` / `translation` / `verbal_cleanup` 分支有用
+- 目前沒壞是因 agent 自己 `run(subdir="weekly")` 預設值剛好等於 `_AGENT_DEFAULT_SUBDIR` 的值
+- 將來調整 `_AGENT_DEFAULT_SUBDIR` 就兩邊失同步
+- **解方**：line 92、105 都改成 `subdir=resolved_subdir`
+
+**M2. `podcast_agent.py:148-150` 繁簡判斷字集有重複字**
+- `trad_only = set("國來發時還電們點說這個樣體對應還後從給關戰現設關處")` — 「還」「關」各出現兩次
+- `simp_only` 同理重複「还」「关」
+- `set()` 會 dedup，實際判斷樣本比作者預期少，降低 `_is_traditional_chinese` 準確度 → 繁體文章可能被誤判需要翻譯，多花 LLM 費用
+- **解方**：改用 opencc（`pip install opencc`）做精確繁簡判斷，或重寫字集去重並擴充
+
+**M3. `cost_tracker.record_claude()` 無 model 白名單**
+- 若 agent 不小心傳錯字串，`_CLAUDE_PRICES.get(model, _default)` 靜默落到 `_default`（3/15 美元），費用統計失真
+- CLAUDE.md 明文要求「必須傳 LLM_FAST/LLM_MAIN」但沒 runtime guard
+- **解方**：在 `record_claude` 開頭加 `if model not in _CLAUDE_PRICES: print(f"[cost] ⚠ unknown model: {model}")`，不要 silent fallback
+
+**M4. `cost_tracker.print_task_summary()` 漏算 DALL-E**
+- Session 層級 `print_summary()` 有算 DALL-E（$0.04/image），但任務層級沒有 `_ckpt_dalle` 也沒打印
+- speech_ppt 的 DALL-E 單任務成本在 `💰 ...` 那行看不到
+- **解方**：加 `self._ckpt_dalle` checkpoint 與「DALL-E N image」的 summary 輸出
+
+**M5. `company_info_agent.py:200-202` ticker 解析失敗時靜默跳過結構化財務**
+- `symbol = None` 時 return `{"financial_data": {}}`，`generate_report` 的 `if fin and len(fin) > 1` 判定為 false，整段 yfinance context 不會進 prompt
+- 使用者拿到的報告比預期少「結構化財務數據」，但 Word 文件和 `.log` 都沒標註這件事
+- **解方**：`AgentLogger` 加 `add_note("ticker resolution failed for ...")` 區塊，或至少在 `.log` sidecar 寫一行 warning
+
+### 低（小修即可）
+
+**L1. `formatters/word_formatter.py:396` 用 `datetime.utcnow()`**（Python 3.12+ 已 deprecated）→ 改 `datetime.now(datetime.UTC)`
+
+**L2. `utils/file_naming.general()` 沒 sanitize intern_name**：多人模式若包含 `/ \ : * ? " < > |` 會壞檔名。`_intern_str()` 組字串前應先過 `_sanitize`
+
+**L3. `utils/search.py:42-59` 重試失敗時 raise 不印 query**：`raise last_exc` 之前先 `print(f"[search] 放棄 query: {query!r}")`，方便定位哪條搜尋爛掉
+
+**L4. `podcast_agent.py:50-56` `_BLOCKED_DOMAINS` 封了 YouTube / LinkedIn**：這兩個是 podcast 訪談原生平台，全封會漏掉主要來源。建議改只封首頁（不封 `/watch` 或 `/posts/`）或改白名單策略
+
+**L5. `translate.py` 的 `--intern` 不支援 comma 分隔**（line 93 直接把原字串傳下去）。多人模式要手動在命令列處理，不像其他 agent CLI 有自動 split
+
 
 ## Reference Files（範本）
 路徑：`/Users/junjie/Library/CloudStorage/OneDrive-個人(2)/Internship/Works/`
