@@ -38,8 +38,7 @@ CY（老闆）口述指令 → STT → Planner → 確認 → Agents → Word �
 2. `agents/translation_agent.py`
 3. `agents/dictation_agent.py`（letter + meeting 兩種 task_type）
 4. `agents/podcast_agent.py`
-5. `agents/word_count_agent.py`
-6. `delivery/email_draft.py`
+5. `delivery/email_draft.py`
 
 ## Key Architecture Decisions
 
@@ -90,5 +89,4 @@ python agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
 - `translation_agent`：輸入文字/.txt/.docx，輸出 Word（格式同其他 agent）
 - `dictation_agent`：audio → STT → Codex 整理 → Word；letter/meeting 兩種 prompt
 - `podcast_agent`：N 個問題 → 每題搜 3 篇原文 → Word（每題一 section，不做摘要）
-- `word_count_agent`：輸入文字，回傳字數+日期+經手人（純文字，不輸出 Word）
 - `email_draft.py`：根據任務類型產生 email 草稿（主旨/收件人/CC/內文）
