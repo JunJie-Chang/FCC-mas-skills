@@ -49,10 +49,16 @@ _MIN_ARTICLE_CHARS    = 400  # cleaned body must have at least this many chars
 # Social media / low-quality domains to skip
 _BLOCKED_DOMAINS = {
     "facebook.com", "fb.com", "twitter.com", "x.com",
-    "instagram.com", "youtube.com", "youtu.be", "tiktok.com",
-    "reddit.com", "linkedin.com", "pinterest.com", "tumblr.com",
+    "instagram.com", "tiktok.com",
+    "reddit.com", "pinterest.com", "tumblr.com",
     "weibo.com", "weixin.qq.com", "mp.weixin.qq.com",
     "threads.net", "snapchat.com",
+}
+# Domains where only the homepage is blocked; content paths are allowed.
+# YouTube and LinkedIn are primary podcast interview channels — /watch and
+# /posts/ should pass through even though the root domains are low-signal.
+_BLOCKED_HOMEPAGE_DOMAINS = {
+    "youtube.com", "youtu.be", "linkedin.com",
 }
 
 
@@ -97,8 +103,16 @@ def _parse_json(text: str):
 
 
 def _is_blocked(url: str) -> bool:
-    domain = urlparse(url).netloc.lower().replace("www.", "")
-    return any(domain == b or domain.endswith("." + b) for b in _BLOCKED_DOMAINS)
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower().replace("www.", "")
+    if any(domain == b or domain.endswith("." + b) for b in _BLOCKED_DOMAINS):
+        return True
+    if any(domain == b or domain.endswith("." + b) for b in _BLOCKED_HOMEPAGE_DOMAINS):
+        # Allow content paths (e.g. /watch, /posts/), block only the homepage
+        path = parsed.path or ""
+        if path in ("", "/"):
+            return True
+    return False
 
 
 def _scrape(url: str) -> dict:
@@ -145,9 +159,9 @@ def _is_traditional_chinese(text: str) -> bool:
         return False   # Not enough CJK — probably English, skip translation
 
     # Characters that exist only in Traditional Chinese (not in Simplified)
-    trad_only = set("國來發時還電們點說這個樣體對應還後從給關戰現設關處")
+    trad_only = set("國來發時還電們點說這個樣體對應後從給關戰現設處學習臺灣兒萬龍義傳實將產業開為歷會機車")
     # Characters that exist only in Simplified Chinese
-    simp_only  = set("国来发时还电们点说这个样体对应还后从给关战现设关处")
+    simp_only  = set("国来发时还电们点说这个样体对应后从给关战现设处学习台湾儿万龙义传实将产业开为历会机车")
 
     trad_count = sum(1 for c in sample if c in trad_only)
     simp_count = sum(1 for c in sample if c in simp_only)

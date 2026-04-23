@@ -56,6 +56,7 @@ def search(query: str, max_results: int = 3) -> list[dict]:
             last_exc = e
             if attempt < _MAX_RETRIES - 1:
                 time.sleep(_RETRY_DELAY)
+    print(f"[search] 放棄 query: {query!r}（{_MAX_RETRIES} 次重試都失敗：{last_exc}）")
     raise last_exc
 
 

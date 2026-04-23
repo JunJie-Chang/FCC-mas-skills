@@ -89,7 +89,7 @@ def dispatch(
     elif agent_type == "speech_ppt":
         from agents.speech_ppt_agent import run
         return run(speech_topic=task.instruction, intern_name=intern_name,
-                   task_date=task_date, subdir=subdir)
+                   task_date=task_date, subdir=resolved_subdir)
 
     elif agent_type == "podcast":
         from agents.podcast_agent import run
@@ -102,7 +102,7 @@ def dispatch(
                 questions=parsed["questions"],
                 intern_name=intern_name,
                 task_date=task_date,
-                subdir=subdir,
+                subdir=resolved_subdir,
             )
         except Exception:
             raise ValueError(
