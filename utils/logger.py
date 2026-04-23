@@ -148,19 +148,23 @@ class AgentLogger:
 
         if self._financial_data:
             import json
-            ticker = self._financial_data.get("ticker", "unknown")
             lines.append(f"--- Financial Data (yfinance) ---")
-            lines.append(f"Ticker: {ticker}")
-            for tool_id, data in self._financial_data.items():
-                if tool_id == "ticker":
-                    continue
-                lines.append(f"[{tool_id}]")
-                if isinstance(data, dict) and "error" in data:
-                    lines.append(f"  ERROR: {data['error']}")
-                else:
-                    dumped = json.dumps(data, ensure_ascii=False, default=str, indent=2)
-                    for line in dumped.splitlines():
-                        lines.append(f"  {line}")
+            if "_ticker_error" in self._financial_data:
+                lines.append(f"WARNING: {self._financial_data['_ticker_error']}")
+                lines.append("No structured financial data fetched; report relies on Tavily only.")
+            else:
+                ticker = self._financial_data.get("ticker", "unknown")
+                lines.append(f"Ticker: {ticker}")
+                for tool_id, data in self._financial_data.items():
+                    if tool_id == "ticker":
+                        continue
+                    lines.append(f"[{tool_id}]")
+                    if isinstance(data, dict) and "error" in data:
+                        lines.append(f"  ERROR: {data['error']}")
+                    else:
+                        dumped = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+                        for line in dumped.splitlines():
+                            lines.append(f"  {line}")
             lines.append("")
 
         lines.append("--- Output ---")
