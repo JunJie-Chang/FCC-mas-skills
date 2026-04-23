@@ -39,6 +39,12 @@ python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --pdf ~/Dow
 # 直接跑單一 agent
 python3.13 agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
 
+# Podcast agent 直接執行（--questions 為 JSON array 字串）
+python3.13 agents/podcast_agent.py \
+  --topic "全球媒體產業" \
+  --questions '["問題1", "問題2", ...]' \
+  --intern "Justin"
+
 # 口述清稿（去除廢話與開頭語）
 python3.13 agents/verbal_cleanup_agent.py --audio ~/Downloads/recording.m4a --intern "Justin"
 python3.13 agents/verbal_cleanup_agent.py --text "嗯好那個今天想說的是..." --intern "Justin"
@@ -77,7 +83,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
-| `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions） |
+| `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions）；全文抓取用 Tavily extract |
 | `speech_ppt` | `agents/speech_ppt_agent.py` | 簡報研究，需 OPENAI_API_KEY |
 
 ### Agent 內部結構
@@ -116,6 +122,9 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 ### Word 輸出不含 references
 `company_info` / `person_info` 的 Word 文件**不含**內文引用標記（`[N]`）和「參考來源」section。來源資訊只存於 `.log` sidecar，不出現在文件裡。`WordBuilder.add_references()` 方法仍存在於 formatter，但這兩個 agent 不呼叫它。
+
+### podcast 的 planner 特殊規則
+`parse_tasks()` 對 podcast 任務有特殊處理：同一 Podcast 題目的**所有問題必須合成一個任務**，`instruction` 為 JSON 字串 `{"topic": "...", "questions": [...]}` 而非純文字。這是 prompt 內明確的規則，防止 Haiku 把每個問題拆成獨立任務導致 router 無法解析。
 
 ### confirm() 的範圍限制
 `planner.confirm()` 展示的是 Haiku 解析出的 `task.instruction`，讓使用者在執行前確認或修改。**Tavily 搜尋 queries 是在 confirm 之後、agent Node 1 內部才生成**，使用者看不到。若 query 生成跑偏（如研究對象被誤解為產業生態），只能在 confirm 階段透過修改 instruction 間接影響。

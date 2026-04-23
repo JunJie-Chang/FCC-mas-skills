@@ -118,6 +118,12 @@ def parse_tasks(
 - 若同一個指令有多家公司/人物，每個獨立一條
 - 若只有一個任務，也回傳長度為 1 的陣列
 
+【特殊規則 — podcast】
+若 agent_type 為 podcast，同一個 Podcast 題目的所有問題必須合成「一個任務」，
+instruction 必須是 JSON 字串（不是物件，是 json.dumps 後的字串），格式如下：
+  {{\"topic\": \"題目名稱\", \"questions\": [\"問題1\", \"問題2\", ...]}}
+不可把每個問題拆成獨立任務。
+
 範例輸出：
 [
   {{
@@ -126,9 +132,9 @@ def parse_tasks(
     "instruction": "調查英維克（Envicool, 深圳上市 002837.SZ），重點放業務結構、財務表現與競爭優勢"
   }},
   {{
-    "agent_type": "person_info",
-    "label": "林志明 — 人物背景",
-    "instruction": "調查林志明（大倡國際董事長），重點放公司關聯與產業位置"
+    "agent_type": "podcast",
+    "label": "Podcast：全球媒體產業",
+    "instruction": "{{\"topic\": \"全球媒體產業\", \"questions\": [\"問題1\", \"問題2\"]}}"
   }}
 ]
 """
