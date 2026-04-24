@@ -85,7 +85,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### Agent 清單
 | agent_type | 檔案 | 說明 |
 |---|---|---|
-| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，7-node graph（含財務資料層） |
+| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，8-node graph（含財務資料層 + iterative search loop） |
 | `person_info` | `agents/person_info_agent.py` | 人物背景，4-node graph |
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
@@ -95,16 +95,19 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 ### Agent 內部結構
 
-**company_info**（7-node LangGraph）：
-1. `parse_task` — haiku 產生 3-5 個 Tavily 搜尋 query
+**company_info**（8-node LangGraph）：
+1. `parse_task` — haiku 同時產出：3-5 個英文 Tavily 搜尋 query + `task_breadth`（`narrow` | `broad`）分類
 2. `check_financial_need` — haiku Q1/Q2/Q3 分類（見下方 Financial Data Layer）
-3. `fetch_financial_data` — ticker 解析 + yfinance 抓取；Q1=N 或 Q2=[] 時 no-op
+3. `fetch_financial_data` — ticker 解析（Haiku → yf.Search → FinanceDatabase 三段 fallback）+ yfinance 抓取；**conditional edge**：Q2=[] 直接跳過這個 node
 4. `fetch_sector_data` — FinanceDatabase 產業掃描；Q3.needed=N 時 no-op
-5. `run_search` — Tavily 搜尋，每 query 3 筆結果
-6. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換；財務 / 產業資料注入 context
-7. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+5. `run_search` — Tavily 搜尋；narrow 每 query 3 筆，broad 每 query 6 筆；消耗 `pending_queries` 並 append 到 `search_results`
+6. `evaluate_coverage` — haiku 判斷 `search_results` 是否足夠回答任務；不夠則產生 follow-up queries 寫入 `pending_queries` 觸發 loop 回 `run_search`；narrow 任務在 rounds ≥ 1 時直接跳過省成本
+7. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換；財務 / 產業資料注入 context
+8. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
 
-**person_info**（4-node LangGraph）：同上的 1 / 5 / 6 / 7，不含財務資料層
+**Iterative search 上限**：`_MAX_ROUNDS = 4`（包含初始 round）、`_MAX_TOTAL_QUERIES = 15`（跨 round 硬上限）。達到任一上限、Haiku 回 `sufficient=Y`、或 follow-up 去重後為空，皆會從 `evaluate_coverage` 走 conditional edge 進 `generate_report`。
+
+**person_info**（4-node LangGraph）：同 company_info 的 1 / 5 / 7 / 8，不含財務資料層與 iterative loop（單輪搜尋）
 
 **speech_ppt**（4-node LangGraph）：
 1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
@@ -198,13 +201,20 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 **Q3 工具**（`SECTOR_TOOL_DESCRIPTIONS` / `SECTOR_TOOL_REGISTRY`）：
 - `sector_scan` — FinanceDatabase 依 sector + country 列出上市公司清單（預設最多 30 筆）
 
-兩個 fetch node 都是 no-op when 條件不滿足，不需要 conditional edge。呼叫之間有 `_CALL_DELAY`（預設 1.5s）rate limiting；失敗回傳 `{"error": "..."}` 並印警告，不中斷流程。
+`fetch_financial_data` 走 conditional edge（Q2=[] 時由 `check_financial_need` 直接跳到 `fetch_sector_data`，不浪費 ticker 解析呼叫）。`fetch_sector_data` 是 no-op when Q3.needed≠Y。呼叫之間有 `_CALL_DELAY`（預設 1.5s）rate limiting；失敗回傳 `{"error": "..."}` 並印警告，不中斷流程。
 
 新增工具：yfinance 工具加入 `TOOL_REGISTRY` + `YFINANCE_TOOL_DESCRIPTIONS`；新資料庫工具加入各自的 `*_TOOL_REGISTRY` + `*_TOOL_DESCRIPTIONS`，並在 prompt 新增對應 Qn。
 
 Financial / sector data 以結構化 JSON 注入 `generate_report` context；財務數字優先採用 yfinance，Tavily 數字僅作背景參考。所有 fetched data 同時寫入 `.log` sidecar（`--- Financial Data ---` / `--- Sector Data ---` 區塊）。
 
-**Ticker 解析失敗行為**：`fetch_financial_data` 在 `resolve_ticker` 回傳 None 時會把 `financial_data` 設為 `{"_ticker_error": "..."}`。`generate_report` 的 `len(fin) > 1` 判斷會自動跳過結構化財務 context 注入（prompt 不受污染），但 `.log` sidecar 的 `--- Financial Data (yfinance) ---` 區塊會改印 `WARNING: ticker resolution failed for ...`，讓使用者事後能判斷為何該次報告沒有 yfinance 數據。
+**Ticker 解析流程（三段 fallback）**：`resolve_ticker(company_name, task_context)` 依序嘗試：
+1. `_haiku_normalize_ticker` — Haiku 讀公司名 + task 內容，直接輸出 market-correct ticker（懂 .TW / .TWO / .HK / .SZ / .SS / .T / .KS / 美股字母）；`confidence=low` 視為 None 不採用
+2. `yf.Search` — yfinance 模糊比對
+3. FinanceDatabase `Equities().search`
+
+三段都失敗才回 None，`fetch_financial_data` 把 `financial_data` 設為 `{"_ticker_error": "..."}`，log sidecar 寫 `--- Financial Data (not fetched) ---` 並印 WARNING。
+
+**Data source self-declaring**：每個 fetcher 透過 `_tag_source()` 在成功 payload 加 `"_source": "yfinance"` 或 `"FinanceDatabase"`。`utils/logger.py` 讀每筆 payload 的 `_source`，動態產生 log label（例：`--- Financial Data (yfinance: stock_price, key_metrics) ---`），不再 hardcode。新增跨資料源 fetcher 時務必呼叫 `_tag_source()`。
 
 ## 尚未建置
 - `delivery/email_draft.py` — email 草稿生成

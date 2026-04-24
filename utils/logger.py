@@ -137,7 +137,8 @@ class AgentLogger:
 
         if self._sector_data and "companies" in self._sector_data:
             import json
-            lines.append("--- Sector Data (FinanceDatabase) ---")
+            source = self._sector_data.get("_source", "unknown")
+            lines.append(f"--- Sector Data ({source}) ---")
             lines.append(f"Sector:  {self._sector_data.get('sector', '')}")
             lines.append(f"Country: {self._sector_data.get('country') or 'all'}")
             lines.append(f"Results: {len(self._sector_data.get('companies', []))} companies")
@@ -148,12 +149,21 @@ class AgentLogger:
 
         if self._financial_data:
             import json
-            lines.append(f"--- Financial Data (yfinance) ---")
             if "_ticker_error" in self._financial_data:
+                lines.append("--- Financial Data (not fetched) ---")
                 lines.append(f"WARNING: {self._financial_data['_ticker_error']}")
                 lines.append("No structured financial data fetched; report relies on Tavily only.")
             else:
                 ticker = self._financial_data.get("ticker", "unknown")
+                # Aggregate sources actually used by each tool payload
+                sources: dict[str, list[str]] = {}
+                for tool_id, data in self._financial_data.items():
+                    if tool_id == "ticker" or not isinstance(data, dict):
+                        continue
+                    src = data.get("_source", "unknown")
+                    sources.setdefault(src, []).append(tool_id)
+                label = ", ".join(f"{s}: {', '.join(t)}" for s, t in sources.items()) or "unknown"
+                lines.append(f"--- Financial Data ({label}) ---")
                 lines.append(f"Ticker: {ticker}")
                 for tool_id, data in self._financial_data.items():
                     if tool_id == "ticker":

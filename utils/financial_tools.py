@@ -54,13 +54,88 @@ def _ticker(symbol: str):
 
 # ── Ticker resolution ─────────────────────────────────────────────────────────
 
-def resolve_ticker(company_name: str) -> str | None:
+def _haiku_normalize_ticker(company_name: str, task_context: str = "") -> str | None:
+    """
+    Ask Haiku to output a market-correct ticker directly from a company name
+    (handles 中/英文 + 跨市場 suffix: .TW/.TWO/.HK/.SZ/.SS/純字母 US).
+    Returns None when Haiku is unsure — caller should fall through to
+    yf.Search / FinanceDatabase.
+    """
+    import json as _json
+    import os
+    import re
+    try:
+        from anthropic import Anthropic
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        import config
+    except Exception:
+        return None
+
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = f"""判斷下列資訊指向哪一間「單一」上市公司的股票代碼。
+
+公司候選：{company_name}
+任務內容：{task_context or '(無)'}
+
+規則：
+- 台股上市 .TW、上櫃 .TWO；港股 .HK；陸股深圳 .SZ、上海 .SS；美股純字母（如 TSLA、NVDA）；日股 .T；韓股 .KS
+- 若資訊指向的是產業、地區、或多家公司，ticker=null
+- 不確定就 null，不要亂猜；confidence=low 時也視為 null
+- 回傳純 JSON，無 markdown 包裝
+
+格式：{{"ticker": "XXXX.YY" | null, "confidence": "high" | "medium" | "low"}}
+"""
+
+    try:
+        client = Anthropic(api_key=api_key)
+        message = client.messages.create(
+            model=config.LLM_FAST,
+            max_tokens=120,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        # Log cost if tracker is available
+        try:
+            from utils.cost_tracker import tracker
+            tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
+        except Exception:
+            pass
+
+        text = message.content[0].text.strip()
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+        m = re.search(r"\{[\s\S]*\}", text)
+        if m:
+            text = m.group(0)
+        data = _json.loads(text)
+        ticker = data.get("ticker")
+        confidence = data.get("confidence", "low")
+        if ticker and confidence in ("high", "medium"):
+            return ticker
+    except Exception as exc:
+        print(f"[financial_tools] ⚠ Haiku ticker normalize failed: {exc}")
+
+    return None
+
+
+def resolve_ticker(company_name: str, task_context: str = "") -> str | None:
     """
     Try to find a ticker symbol for company_name.
+    Strategy 0: Haiku normalizer (best for 中文 / 跨市場 suffix)
     Strategy 1: yfinance Search (fast, covers most major markets)
     Strategy 2: FinanceDatabase equity search (broader but slower)
     Returns the best-guess symbol string, or None if nothing found.
     """
+    # Strategy 0 — Haiku normalizer
+    symbol = _haiku_normalize_ticker(company_name, task_context)
+    if symbol:
+        print(f"[financial_tools] Haiku → {symbol}")
+        return symbol
+
     # Strategy 1 — yfinance Search
     def _yf_search():
         import yfinance as yf
@@ -95,6 +170,13 @@ def resolve_ticker(company_name: str) -> str | None:
 
 # ── Individual data fetchers ──────────────────────────────────────────────────
 
+def _tag_source(fn_name: str, result: dict, source: str) -> dict:
+    """Attach _source to successful fetches; pass through errors untouched."""
+    if isinstance(result, dict) and "error" not in result:
+        result["_source"] = source
+    return result
+
+
 def fetch_stock_price(symbol: str) -> dict:
     def _fetch():
         t = _ticker(symbol)
@@ -118,7 +200,7 @@ def fetch_stock_price(symbol: str) -> dict:
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ stock_price({symbol}): {result['error']}")
-    return result
+    return _tag_source("stock_price", result, "yfinance")
 
 
 def fetch_financials(symbol: str) -> dict:
@@ -141,7 +223,7 @@ def fetch_financials(symbol: str) -> dict:
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ financials({symbol}): {result['error']}")
-    return result
+    return _tag_source("financials", result, "yfinance")
 
 
 def fetch_key_metrics(symbol: str) -> dict:
@@ -161,7 +243,7 @@ def fetch_key_metrics(symbol: str) -> dict:
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ key_metrics({symbol}): {result['error']}")
-    return result
+    return _tag_source("key_metrics", result, "yfinance")
 
 
 def fetch_holders(symbol: str) -> dict:
@@ -180,7 +262,7 @@ def fetch_holders(symbol: str) -> dict:
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ holders({symbol}): {result['error']}")
-    return result
+    return _tag_source("holders", result, "yfinance")
 
 
 def fetch_news(symbol: str) -> dict:
@@ -200,7 +282,7 @@ def fetch_news(symbol: str) -> dict:
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ news({symbol}): {result['error']}")
-    return result
+    return _tag_source("news", result, "yfinance")
 
 
 # ── FinanceDatabase: sector scan ─────────────────────────────────────────────
@@ -244,7 +326,7 @@ def fetch_sector_scan(sector: str, country: str = None, limit: int = 30) -> dict
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ sector_scan('{sector}', '{country}'): {result['error']}")
-    return result
+    return _tag_source("sector_scan", result, "FinanceDatabase")
 
 
 # ── Tool registry ─────────────────────────────────────────────────────────────

@@ -42,7 +42,10 @@ class CompanyInfoState(TypedDict):
     task_date: str                         # YYYY-MM-DD
     subdir: str                            # output subfolder: daily / weekly / adhoc
     mode: str                              # "short" | "medium"
-    search_queries: list[str]
+    task_breadth: str                      # "narrow" | "broad" — drives per-query result count
+    search_queries: list[str]              # all queries ever run (cumulative)
+    pending_queries: list[str]             # queries to execute in the next run_search pass
+    rounds: int                            # completed run_search rounds (1-indexed after first call)
     search_results: list[dict]             # [{query, results:[{title,url,content,score}]}]
     financial_check: dict                  # {"q1":"Y"|"N","company_name":str,"q2":[tool_ids],"q3":{"needed":"Y"|"N","sector":str,"country":str}}
     financial_data: dict                   # {"ticker": str, tool_id: data_dict, ...}
@@ -85,38 +88,65 @@ def _parse_json(text: str):
 
 def parse_task(state: CompanyInfoState) -> dict:
     """
-    Use claude-haiku to read the task instruction and generate
-    3-5 targeted Tavily search queries.
+    Use claude-haiku to read the task instruction and generate initial
+    Tavily search queries plus a task_breadth classification ("narrow" or
+    "broad") that drives per-query result count.
     """
     client = _get_client()
 
-    prompt = f"""你是一個商業研究助理。根據以下任務指令，產生 3 到 5 個英文搜尋查詢（適合 Tavily），
-目標是找到完成這份報告所需的資訊。
+    prompt = f"""你是一個商業研究助理。根據以下任務指令，回傳 JSON：
+1) breadth 分類：
+   - "narrow"：單一公司、單一人物、或範圍明確的主題
+   - "broad"：產業掃描、國家/地區投資案例、排行榜、多公司比較等需大量資料的任務
+2) 3-5 個英文 Tavily 搜尋查詢
 
 任務指令：{state['task_instruction']}
 
 規則：
 - 查詢語言用英文（搜尋效果更好）
-- 若任務指令有提供股票代碼（如 3017.TW、002837.SZ），每一條 query 都必須帶入該代碼，確保搜到正確公司
-- 每個查詢聚焦在不同面向（財務、業務、競爭等），不要重複
-- 回傳純 JSON 陣列，不要多餘說明
+- 若任務指令有提供股票代碼（如 3017.TW、002837.SZ），每一條 query 都必須帶入該代碼
+- 每個查詢聚焦在不同面向，不要重複
+- 回傳純 JSON 物件，不要多餘說明
 
-格式範例：
-["002837.SZ Envicool data center thermal management revenue", "002837.SZ Envicool liquid cooling business growth", "Shenzhen Envicool Technology competitive advantages IDC"]
+格式：
+{{"breadth": "narrow" | "broad",
+  "queries": ["query1", "query2", "query3"]}}
 """
 
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=512,
+        max_tokens=600,
         messages=[{"role": "user", "content": prompt}],
     )
 
     from utils.cost_tracker import tracker
     tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
 
-    queries = _parse_json(message.content[0].text)
+    try:
+        parsed = _parse_json(message.content[0].text)
+    except Exception:
+        parsed = {}
 
-    return {"search_queries": queries}
+    if isinstance(parsed, dict):
+        queries = parsed.get("queries", [])
+        breadth = parsed.get("breadth", "narrow")
+    elif isinstance(parsed, list):   # fallback: model returned a bare array
+        queries = parsed
+        breadth = "narrow"
+    else:
+        queries, breadth = [], "narrow"
+
+    if breadth not in ("narrow", "broad"):
+        breadth = "narrow"
+
+    print(f"[parse_task] breadth={breadth}  queries={len(queries)}")
+
+    return {
+        "search_queries": list(queries),
+        "pending_queries": list(queries),
+        "task_breadth": breadth,
+        "rounds": 0,
+    }
 
 
 # ── Node 1b: check_financial_need ────────────────────────────────────────────
@@ -195,7 +225,7 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
     company_name = state["financial_check"].get("company_name") or state["task_instruction"][:40]
 
     print(f"[financial_tools] 解析 ticker：{company_name}…")
-    symbol = resolve_ticker(company_name)
+    symbol = resolve_ticker(company_name, task_context=state["task_instruction"])
 
     if not symbol:
         print("[financial_tools] ⚠ 找不到對應 ticker，跳過財務資料抓取")
@@ -224,20 +254,137 @@ def fetch_sector_data(state: CompanyInfoState) -> dict:
 
 # ── Node 2: run_search ────────────────────────────────────────────────────────
 
-_RESULTS_PER_QUERY = 3   # configurable per agent
+_RESULTS_PER_QUERY_NARROW = 3
+_RESULTS_PER_QUERY_BROAD  = 6
+
+# Iterative search caps
+_MAX_ROUNDS         = 4     # incl. initial round
+_MAX_TOTAL_QUERIES  = 15    # hard cap across all rounds
 
 
 def run_search(state: CompanyInfoState) -> dict:
     """
-    Execute Tavily search for each query and collect results.
+    Execute Tavily search for the current pending_queries and append to
+    search_results. Called once initially, and again each time
+    evaluate_coverage decides the corpus is insufficient.
     """
     from utils.cost_tracker import tracker
-    all_results = []
-    for query in state["search_queries"]:
-        results = search(query, max_results=_RESULTS_PER_QUERY)
+
+    pending = state.get("pending_queries", [])
+    breadth = state.get("task_breadth", "narrow")
+    max_results = _RESULTS_PER_QUERY_BROAD if breadth == "broad" else _RESULTS_PER_QUERY_NARROW
+
+    accumulated = list(state.get("search_results", []))
+    for query in pending:
+        results = search(query, max_results=max_results)
         tracker.record_tavily(1)
-        all_results.append({"query": query, "results": results})
-    return {"search_results": all_results}
+        accumulated.append({"query": query, "results": results})
+
+    rounds = state.get("rounds", 0) + 1
+    print(f"[run_search] round={rounds}  +{len(pending)} queries  (total={len(accumulated)})")
+
+    return {
+        "search_results": accumulated,
+        "pending_queries": [],
+        "rounds": rounds,
+    }
+
+
+# ── Node 2b: evaluate_coverage ────────────────────────────────────────────────
+
+def evaluate_coverage(state: CompanyInfoState) -> dict:
+    """
+    Ask Haiku whether the accumulated search_results are sufficient to answer
+    the task. If not, produce follow-up queries targeting the specific gaps.
+
+    Returns pending_queries populated when another round is needed; empty list
+    signals "proceed to generate_report" via the conditional edge.
+    """
+    total_queries = len(state.get("search_queries", []))
+    rounds_done = state.get("rounds", 0)
+
+    # Hard stops — don't even call Haiku
+    if rounds_done >= _MAX_ROUNDS or total_queries >= _MAX_TOTAL_QUERIES:
+        print(f"[evaluate_coverage] cap reached (rounds={rounds_done}, queries={total_queries}) — proceed")
+        return {"pending_queries": []}
+
+    # Narrow tasks: one round is usually enough, skip evaluator to save cost
+    if state.get("task_breadth") != "broad" and rounds_done >= 1:
+        return {"pending_queries": []}
+
+    # Build compact corpus digest for Haiku (titles + snippet only)
+    digest_lines = []
+    for entry in state.get("search_results", []):
+        digest_lines.append(f"[Q] {entry['query']}")
+        for r in entry.get("results", [])[:4]:
+            digest_lines.append(f"  - {r.get('title','')[:120]}")
+            snippet = (r.get("content") or "")[:220].replace("\n", " ")
+            if snippet:
+                digest_lines.append(f"    {snippet}")
+    digest = "\n".join(digest_lines) or "(no results yet)"
+
+    already_run = state.get("search_queries", [])
+    remaining_budget = _MAX_TOTAL_QUERIES - total_queries
+
+    prompt = f"""你是一個搜尋結果充分性評估助理。判斷目前蒐集到的資料是否足以回答任務。
+
+任務指令：{state['task_instruction']}
+
+已執行過的查詢（不要重複）：
+{chr(10).join('- ' + q for q in already_run)}
+
+已蒐集的資料摘要：
+{digest}
+
+規則：
+- 若資料足夠完整回答任務，sufficient="Y"
+- 若還缺關鍵面向（如數字、具體名單、時間序列），sufficient="N" 並列出具體缺口與追加查詢
+- followup_queries 為英文，最多 {min(4, remaining_budget)} 條，不可與「已執行過的查詢」重複
+- 每條 follow-up 針對一個具體缺口，不要寬泛覆述
+- 回傳純 JSON，無 markdown
+
+格式：
+{{"sufficient": "Y" | "N",
+  "missing": ["缺口 1", "缺口 2"],
+  "followup_queries": ["specific query 1", "specific query 2"]}}
+"""
+
+    client = _get_client()
+    message = client.messages.create(
+        model=config.LLM_FAST,
+        max_tokens=600,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    from utils.cost_tracker import tracker
+    tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
+
+    try:
+        verdict = _parse_json(message.content[0].text)
+    except Exception as exc:
+        print(f"[evaluate_coverage] parse failed ({exc}); proceeding")
+        return {"pending_queries": []}
+
+    if verdict.get("sufficient") == "Y":
+        print("[evaluate_coverage] sufficient ✓")
+        return {"pending_queries": []}
+
+    followups = verdict.get("followup_queries") or []
+    # Dedupe against already-run queries
+    seen = {q.lower() for q in already_run}
+    new_queries = [q for q in followups if q and q.lower() not in seen]
+    # Enforce remaining budget
+    new_queries = new_queries[:remaining_budget]
+
+    if not new_queries:
+        print("[evaluate_coverage] no new follow-ups — proceed")
+        return {"pending_queries": []}
+
+    print(f"[evaluate_coverage] insufficient — +{len(new_queries)} follow-ups: {verdict.get('missing', [])}")
+    return {
+        "pending_queries": new_queries,
+        "search_queries": already_run + new_queries,
+    }
 
 
 # ── Node 3: generate_report ───────────────────────────────────────────────────
@@ -388,15 +535,25 @@ def build_graph():
     graph.add_node("fetch_financial_data", fetch_financial_data)
     graph.add_node("fetch_sector_data",    fetch_sector_data)
     graph.add_node("run_search",           run_search)
+    graph.add_node("evaluate_coverage",    evaluate_coverage)
     graph.add_node("generate_report",      generate_report)
     graph.add_node("format_output",        format_output)
 
     graph.set_entry_point("parse_task")
     graph.add_edge("parse_task",           "check_financial_need")
-    graph.add_edge("check_financial_need", "fetch_financial_data")
+    graph.add_conditional_edges(
+        "check_financial_need",
+        lambda s: "fetch" if s["financial_check"].get("q2") else "skip",
+        {"fetch": "fetch_financial_data", "skip": "fetch_sector_data"},
+    )
     graph.add_edge("fetch_financial_data", "fetch_sector_data")
     graph.add_edge("fetch_sector_data",    "run_search")
-    graph.add_edge("run_search",           "generate_report")
+    graph.add_edge("run_search",           "evaluate_coverage")
+    graph.add_conditional_edges(
+        "evaluate_coverage",
+        lambda s: "loop" if s.get("pending_queries") else "proceed",
+        {"loop": "run_search", "proceed": "generate_report"},
+    )
     graph.add_edge("generate_report",      "format_output")
     graph.add_edge("format_output",        END)
 
@@ -433,7 +590,10 @@ def run(
         "task_date": task_date or date.today().strftime("%Y-%m-%d"),
         "subdir": subdir,
         "mode": mode,
+        "task_breadth": "narrow",
         "search_queries": [],
+        "pending_queries": [],
+        "rounds": 0,
         "search_results": [],
         "financial_check": {},
         "financial_data": {},
