@@ -50,6 +50,12 @@ python3.13 agents/podcast_agent.py \
 python3.13 agents/verbal_cleanup_agent.py --audio ~/Downloads/recording.m4a --intern "Justin"
 python3.13 agents/verbal_cleanup_agent.py --text "嗯好那個今天想說的是..." --intern "Justin"
 python3.13 main.py --audio recording.m4a --type verbal_cleanup --intern "Justin"
+
+# 演講 PPT（結構化頁自動生成；非結構化頁 echo notes 給操作者）
+python3.13 agents/speech_ppt_agent.py --audio ~/Downloads/recording.m4a --intern "Justin"
+python3.13 agents/speech_ppt_agent.py --audio ~/Downloads/recording.m4a --topic "台中智慧製造" --intern "Justin"
+python3.13 agents/speech_ppt_agent.py --text "第一頁：智慧製造定義..." --intern "Justin" --no-images
+python3.13 main.py --audio recording.m4a --type speech_ppt --intern "Justin"
 ```
 
 ## Tech Stack
@@ -85,7 +91,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
 | `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions）；全文抓取用 trafilatura（失敗 fallback 到 Tavily snippet） |
-| `speech_ppt` | `agents/speech_ppt_agent.py` | 簡報研究，需 OPENAI_API_KEY |
+| `speech_ppt` | `agents/speech_ppt_agent.py` | 演講 PPT；輸入 CY 口述 transcript；結構化頁自動生成（DALL-E），非結構化頁 echo notes；需 OPENAI_API_KEY |
 
 ### Agent 內部結構
 
@@ -99,6 +105,27 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 7. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
 
 **person_info**（4-node LangGraph）：同上的 1 / 5 / 6 / 7，不含財務資料層
+
+**speech_ppt**（4-node LangGraph）：
+1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
+2. `confirm_slides` — CLI 互動展示計劃（標題 + bullets + notes 預覽），**確認後才生成 DALL-E**；取消則 END
+3. `generate_images` — DALL-E 3，只對 structured 頁，最多 retry 3 次；`--no-images` 跳過
+4. `build_ppt` — 用 python-pptx 建立 structured 頁（標題 + 5 bullets + 右側圖）；unstructured 頁僅 echo notes 到 console + `.log` sidecar
+
+**speech_ppt 的 planner 特殊規則**：同 `verbal_cleanup`，加入 `_MANUAL_ONLY_TYPES`。Haiku 不自動分類，必須 `--type speech_ppt`。`parse_tasks()` early return：raw transcript 原封不動包成一個 PlanTask，不被 Haiku 改寫。
+
+**speech_ppt 的 confirm_slides vs planner.confirm() 的分工**：
+- `planner.confirm()`（外層）：確認「這個任務要交給 speech_ppt agent 執行」
+- `confirm_slides`（內層，agent 內）：確認「這些投影片標題 + bullets 是否正確」，此時才燒 DALL-E
+
+**PPTX 版面規格**（10.0" × 7.5"，`assets/ppt_chrome_template.pptx` OBJECT layout）：
+- 背景（深藍漸層）、橫線（`#9CC2E5`，y≈1.308in）、右下角 logo、左下角「藍濤亞洲 FCC Partners」標籤、頁碼 placeholder：全部繼承自 OBJECT layout，不需手動加
+- Title textbox：(0.51, 0.40) 8.98 × 0.93 in，28pt，白色（`#FFFFFF`）
+- Bullets textbox（左半）：(0.51, 1.49) 4.70 × 4.31 in，24pt Bold，白色，150% 行距，10pt spcBef，hanging indent，白色 `•` bullet character
+- Image（右半）：(5.45, 1.49) 4.20 × 4.31 in，DALL-E 3 寫實風格，無文字
+- Page num：繼承自 layout sldNum placeholder（自動 field）
+
+**Chrome template 維護**：`assets/ppt_chrome_template.pptx` 存在 repo，從 `_PPT_REFERENCE`（OneDrive 的參考 PPTX）以 `_ensure_chrome_template()` 自動建立。template 不存在時首次執行自動重建；reference PPTX 不在時 fallback 到 blank layout。
 
 ### router → agent 的 mode 傳遞規則
 - `company_info` / `person_info` / `dictation`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
@@ -181,19 +208,10 @@ Financial / sector data 以結構化 JSON 注入 `generate_report` context；財
 
 ## 尚未建置
 - `delivery/email_draft.py` — email 草稿生成
-- `speech_ppt` 雖有 agent code（`agents/speech_ppt_agent.py`），但尚未接入 `AGENT_TYPES` / planner，只能透過直接 CLI 執行。缺 confirm step、DALL-E retry 機制
 
 ## 已知問題與改進清單
 
 下列為程式碼靜態審閱後仍未修的項目。M1-M5 / L1-L5 已於 2026-04-23 修復。
-
-### 高（未完工，僅 CLI 可跑）
-
-**H1. `speech_ppt` 未接入 `AGENT_TYPES`**
-- 只能透過 `python3.13 agents/speech_ppt_agent.py --topic "..."` CLI 直跑
-- 未接入原因：缺 confirm step（標題定案後才畫圖）、DALL-E 失敗無 retry
-- （DALL-E 成本已進 `print_task_summary`，此項不再是阻擋條件）
-- 保留現狀，待補足 confirm / retry 後再接入 planner / router 主流程
 
 
 ## Reference Files（範本）

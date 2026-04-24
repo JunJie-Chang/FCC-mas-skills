@@ -44,10 +44,12 @@ AGENT_TYPES = {
     "meeting":         "會議記錄整理（音檔）",
     "verbal_cleanup":  "口述清稿（去除廢話與開頭語）",
     "podcast":         "Podcast 研究題目搜尋",
+    "speech_ppt":      "演講投影片（PPT）製作",
 }
 
 # Types excluded from Haiku auto-classification; must be specified via --type.
-_MANUAL_ONLY_TYPES = {"verbal_cleanup"}
+# These agents receive the raw transcript unchanged — Haiku must not rewrite it.
+_MANUAL_ONLY_TYPES = {"verbal_cleanup", "speech_ppt"}
 
 
 # ── Task structure ────────────────────────────────────────────────────────────
