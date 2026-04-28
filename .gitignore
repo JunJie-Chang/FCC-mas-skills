@@ -16,3 +16,6 @@ output/
 
 # Claude Code
 .claude/
+
+#Issue
+Issues.md
