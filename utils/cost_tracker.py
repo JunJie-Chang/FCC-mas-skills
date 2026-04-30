@@ -19,10 +19,14 @@ Actual charges: check each platform's dashboard.
 # Claude: per 1M tokens
 _CLAUDE_PRICES = {
     "claude-opus-4-6":          {"in": 15.00, "out": 75.00},
+    "claude-opus-4-7":          {"in": 15.00, "out": 75.00},
+    "claude-sonnet-4-6":        {"in":  3.00, "out": 15.00},
     "claude-haiku-4-5-20251001": {"in":  0.80, "out":  4.00},
     # fallback for unknown models
     "_default":                  {"in":  3.00, "out": 15.00},
 }
+
+_TASK_COST_WARN_USD = 0.30   # print ⚠ if a single task exceeds this
 
 _WHISPER_PER_SECOND = 0.006 / 60   # $0.006/min
 _DALLE3_PER_IMAGE   = 0.04          # standard 1024×1024
@@ -101,7 +105,10 @@ class CostTracker:
         if task_tavily:
             parts.append(f"Tavily {task_tavily} calls")
         if parts:
-            print("   💰 " + " | ".join(parts) + f"  →  total ${total_usd:.4f}")
+            line = "   💰 " + " | ".join(parts) + f"  →  total ${total_usd:.4f}"
+            if total_usd >= _TASK_COST_WARN_USD:
+                line += f"  ⚠ 超過 ${_TASK_COST_WARN_USD:.2f}"
+            print(line)
 
     # ── Report ────────────────────────────────────────────────────────────────
 

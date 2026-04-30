@@ -23,8 +23,9 @@ MARGIN_LEFT_CM = 3.2
 MARGIN_RIGHT_CM = 3.2
 
 # ── LLM models ────────────────────────────────────────────────────────────────
-LLM_MAIN = "claude-opus-4-6"
-LLM_FAST = "claude-haiku-4-5-20251001"
+LLM_MAIN      = "claude-opus-4-6"               # medium mode / complex synthesis
+LLM_SYNTHESIS = "claude-sonnet-4-6"             # short mode synthesis (lower cost)
+LLM_FAST      = "claude-haiku-4-5-20251001"     # classification / query gen / eval
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
