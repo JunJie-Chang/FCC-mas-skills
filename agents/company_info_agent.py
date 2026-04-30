@@ -621,6 +621,7 @@ if __name__ == "__main__":
     parser.add_argument("--intern", default=None,  help="Intern name(s), comma-separated")
     parser.add_argument("--date",   default=None,  help="Task date YYYY-MM-DD")
     parser.add_argument("--subdir", default="adhoc", choices=["daily", "weekly", "adhoc"])
+    parser.add_argument("--yes",    action="store_true", help="Skip confirmation prompt")
     args = parser.parse_args()
 
     intern = [n.strip() for n in args.intern.split(",")] if args.intern and "," in args.intern else args.intern
@@ -628,7 +629,7 @@ if __name__ == "__main__":
     # ── Plan → confirm before running ─────────────────────────────
     print("正在解析任務...")
     tasks = parse_tasks(args.task, force_type="company_info")
-    confirmed = confirm(tasks)
+    confirmed = tasks if args.yes else confirm(tasks)
 
     if not confirmed:
         exit(0)
