@@ -90,21 +90,26 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
-| `podcast` | `agents/podcast_agent.py` | Podcast 研究；router 傳 JSON instruction（含 topic/questions）；全文抓取用 trafilatura（失敗 fallback 到 Tavily snippet） |
+| `podcast` | `agents/podcast_agent.py` | Podcast 研究；屬 `_MANUAL_ONLY_TYPES`，必須 `--type podcast`；router 傳 raw 原文，agent 內 `parse_instruction` node 用 Haiku 解析 topic/questions；全文抓取用 trafilatura（失敗 fallback 到 Tavily snippet） |
 | `speech_ppt` | `agents/speech_ppt_agent.py` | 演講 PPT；輸入 CY 口述 transcript；結構化頁自動生成（DALL-E），非結構化頁 echo notes；需 OPENAI_API_KEY |
 
 ### Agent 內部結構
 
-**company_info**（7-node LangGraph）：
-1. `parse_task` — haiku 產出 3-5 個英文 Tavily 搜尋 query
-2. `check_financial_need` — haiku Q1/Q2/Q3 分類（見下方 Financial Data Layer）
-3. `fetch_financial_data` — ticker 解析（Haiku → yf.Search → FinanceDatabase 三段 fallback）+ yfinance 抓取；**conditional edge**：Q2=[] 直接跳過這個 node
+**company_info**（10-node LangGraph，ReAct loop）：
+1. `parse_task` — Haiku 產出 research plan（todos 3-6 個問題）+ 初始 queries（推論式設計，搜一手來源）
+2. `check_financial_need` — Haiku Q1/Q2/Q3 分類（見下方 Financial Data Layer）
+3. `fetch_financial_data` — ticker 解析 + yfinance 抓取；**conditional edge**：Q2=[] 跳過
 4. `fetch_sector_data` — FinanceDatabase 產業掃描；Q3.needed=N 時 no-op
-5. `run_search` — Tavily 搜尋；每 query 3 筆結果，單輪執行
-6. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換；財務 / 產業資料注入 context
-7. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+5. `run_search` — 執行初始 batch queries，結果存入 evidence pool
+6. `evaluate` — Haiku 評估每個 todo：done / pending / unresolved；連續 2 輪無新資料自動 done
+7. `next_action` — Haiku 依 todo 狀態決定下一條搜尋 query（或觸發 done）
+8. `execute_search` — 執行單條 query，結果追加 evidence pool；**loop back to evaluate**
+9. `generate_report` — Sonnet（short）/ Opus（medium）合成 JSON 報告；evidence 全部注入 context
+10. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
 
-**person_info**（4-node LangGraph）：同 company_info 的 1 / 5 / 6 / 7，不含財務資料層
+**company_info loop 控制**：`MAX_ROUNDS=6`（hard cap）；所有 todo 皆 done 或 unresolved 提前結束；連續 2 輪 0 結果（stall）強制結束
+
+**person_info**（8-node LangGraph，同 ReAct loop）：同 company_info，無財務資料層（無 check_financial_need / fetch_financial_data / fetch_sector_data）；`MAX_ROUNDS=5`
 
 **speech_ppt**（4-node LangGraph）：
 1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
@@ -127,6 +132,21 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 **Chrome template 維護**：`assets/ppt_chrome_template.pptx` 存在 repo，從 `_PPT_REFERENCE`（OneDrive 的參考 PPTX）以 `_ensure_chrome_template()` 自動建立。template 不存在時首次執行自動重建；reference PPTX 不在時 fallback 到 blank layout。
 
+### utils/react_loop.py — 共用 ReAct loop
+
+`company_info` 和 `person_info` 共用的搜尋迴圈邏輯，避免重複程式碼。
+
+**Public API**：
+- `run_initial_search(state)` — 執行 parse_task 產出的初始 batch queries，結果存入 evidence pool
+- `next_action(state, max_rounds, search_hint)` — Haiku 決定下一條 query（推論式設計）
+- `execute_search(state)` — 執行單條 query，追加 evidence
+- `evaluate(state)` — Haiku 標記各 todo 為 done / pending / unresolved
+- `should_continue(state, max_rounds)` — conditional edge function，回傳 `"loop"` 或 `"done"`
+
+**常數**：`RESULTS_PER_QUERY=3`、`STALL_ROUNDS=2`
+
+**各 agent 的包裝方式**：每個 agent 定義 `_MAX_ROUNDS` 和 `_SEARCH_HINT` 常數，再用薄包裝函式呼叫 react_loop 的 public API，讓 LangGraph 拿到正確的 TypedDict 型別標注。新增同樣需要 ReAct loop 的 research agent 時直接 import 並包裝，不需修改 react_loop.py。
+
 ### router → agent 的 mode 傳遞規則
 - `company_info` / `person_info` / `dictation`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
 - `podcast` / `speech_ppt` / `translation`：router 個別傳參，不走 `**kwargs`，不需要 `mode`
@@ -145,14 +165,16 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### generate_report Prompt 規則（所有 agent 適用）
 - 不在任何名詞後加括號標注其他語言的原文或譯名（不論英文、越南文或任何語言）
 - 不在報告內容中提及任務指令的措辭、比喻或身份設定
-- **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁
-- **Medium mode**：section 數量不限，可延伸分析
+- **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方為準」「資料可能有誤」等 hedge / disclaimer
+- **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁；合成用 `LLM_SYNTHESIS`（Sonnet）
+- **Medium mode**：section 數量不限，可延伸分析；合成用 `LLM_MAIN`（Opus）
+- **Section types**：`bullets`（條列）/ `paragraph`（敘述）/ `table`（多欄比較，含 headers + rows）；Sonnet/Opus 自選最合適的
 
 ### Word 輸出不含 references
 `company_info` / `person_info` 的 Word 文件**不含**內文引用標記（`[N]`）和「參考來源」section。來源資訊只存於 `.log` sidecar，不出現在文件裡。`WordBuilder.add_references()` 方法仍存在於 formatter，但這兩個 agent 不呼叫它。
 
 ### podcast 的 planner 特殊規則
-`parse_tasks()` 對 podcast 任務有特殊處理：同一 Podcast 題目的**所有問題必須合成一個任務**，`instruction` 為 JSON 字串 `{"topic": "...", "questions": [...]}` 而非純文字。這是 prompt 內明確的規則，防止 Haiku 把每個問題拆成獨立任務導致 router 無法解析。
+`podcast` 屬 `_MANUAL_ONLY_TYPES`，Haiku 不自動分類。必須 `--type podcast`。`parse_tasks()` early return：raw 原文原封不動傳給 agent，不被 Haiku 改寫。topic/questions 解析在 agent 內的 `parse_instruction` node（Haiku）執行。router 直接傳 `task_instruction=raw`，不再解析 JSON。
 
 ### podcast 的 domain 過濾
 `_BLOCKED_DOMAINS` 封社群 / 低品質站（Facebook、Twitter / X、Instagram、TikTok、Reddit 等）；`_BLOCKED_HOMEPAGE_DOMAINS`（YouTube、LinkedIn）只封首頁（`path in ("", "/")`），放行 `/watch`、`/posts/` 等內容路徑。原因：這兩個網站是 podcast 訪談原生平台，完全封鎖會漏掉主要來源。新增 podcast 常見平台時先評估是要完全封還是只封首頁。
