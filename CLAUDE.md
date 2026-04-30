@@ -85,7 +85,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### Agent 清單
 | agent_type | 檔案 | 說明 |
 |---|---|---|
-| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，8-node graph（含財務資料層 + iterative search loop） |
+| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，7-node graph（含財務資料層） |
 | `person_info` | `agents/person_info_agent.py` | 人物背景，4-node graph |
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
@@ -95,19 +95,16 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 ### Agent 內部結構
 
-**company_info**（8-node LangGraph）：
-1. `parse_task` — haiku 同時產出：3-5 個英文 Tavily 搜尋 query + `task_breadth`（`narrow` | `broad`）分類
+**company_info**（7-node LangGraph）：
+1. `parse_task` — haiku 產出 3-5 個英文 Tavily 搜尋 query
 2. `check_financial_need` — haiku Q1/Q2/Q3 分類（見下方 Financial Data Layer）
 3. `fetch_financial_data` — ticker 解析（Haiku → yf.Search → FinanceDatabase 三段 fallback）+ yfinance 抓取；**conditional edge**：Q2=[] 直接跳過這個 node
 4. `fetch_sector_data` — FinanceDatabase 產業掃描；Q3.needed=N 時 no-op
-5. `run_search` — Tavily 搜尋；narrow 每 query 3 筆，broad 每 query 6 筆；消耗 `pending_queries` 並 append 到 `search_results`
-6. `evaluate_coverage` — haiku 判斷 `search_results` 是否足夠回答任務；不夠則產生 follow-up queries 寫入 `pending_queries` 觸發 loop 回 `run_search`；narrow 任務在 rounds ≥ 1 時直接跳過省成本
-7. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換；財務 / 產業資料注入 context
-8. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+5. `run_search` — Tavily 搜尋；每 query 3 筆結果，單輪執行
+6. `generate_report` — opus 合成 JSON 報告，prompt 依 `mode` 切換；財務 / 產業資料注入 context
+7. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
 
-**Iterative search 上限**：`_MAX_ROUNDS = 4`（包含初始 round）、`_MAX_TOTAL_QUERIES = 15`（跨 round 硬上限）。達到任一上限、Haiku 回 `sufficient=Y`、或 follow-up 去重後為空，皆會從 `evaluate_coverage` 走 conditional edge 進 `generate_report`。
-
-**person_info**（4-node LangGraph）：同 company_info 的 1 / 5 / 7 / 8，不含財務資料層與 iterative loop（單輪搜尋）
+**person_info**（4-node LangGraph）：同 company_info 的 1 / 5 / 6 / 7，不含財務資料層
 
 **speech_ppt**（4-node LangGraph）：
 1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
