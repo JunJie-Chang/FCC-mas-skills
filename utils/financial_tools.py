@@ -306,10 +306,6 @@ def fetch_sector_scan(sector: str, country: str = None, limit: int = 30) -> dict
 
         df = equities.search(**kwargs) if kwargs else equities.select()
         if df.empty:
-            # Retry with looser sector match (drop country constraint)
-            if country:
-                df = equities.search(industry_group=sector) if sector else df
-        if df.empty:
             return {"error": f"no results for sector='{sector}' country='{country}'"}
 
         cols = [c for c in ["name", "exchange", "country", "currency", "market"] if c in df.columns]
