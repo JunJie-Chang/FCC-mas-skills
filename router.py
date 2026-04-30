@@ -97,21 +97,12 @@ def dispatch(
 
     elif agent_type == "podcast":
         from agents.podcast_agent import run
-        import json as _json
-        instr = task.instruction
-        try:
-            parsed = _json.loads(instr)
-            return run(
-                topic=parsed["topic"],
-                questions=parsed["questions"],
-                intern_name=intern_name,
-                task_date=task_date,
-                subdir=resolved_subdir,
-            )
-        except Exception:
-            raise ValueError(
-                "podcast_agent：task.instruction 需為 JSON，含 topic / questions 欄位"
-            )
+        return run(
+            task_instruction=task.instruction,
+            intern_name=intern_name,
+            task_date=task_date,
+            subdir=resolved_subdir,
+        )
 
     else:
         raise ValueError(f"未知的 agent_type：{agent_type!r}")

@@ -49,7 +49,7 @@ AGENT_TYPES = {
 
 # Types excluded from Haiku auto-classification; must be specified via --type.
 # These agents receive the raw transcript unchanged — Haiku must not rewrite it.
-_MANUAL_ONLY_TYPES = {"verbal_cleanup", "speech_ppt"}
+_MANUAL_ONLY_TYPES = {"verbal_cleanup", "speech_ppt", "podcast"}
 
 
 # ── Task structure ────────────────────────────────────────────────────────────
@@ -125,26 +125,27 @@ def parse_tasks(
   - "agent_type": 從上方清單選一個最符合的
   - "label": 簡短繁體中文標籤，顯示在 terminal 讓使用者確認
   - "instruction": 完整的執行指令，直接傳給 AI（必須包含所有關鍵識別符，如股票代碼、英文名）
-- 若同一個指令有多家公司/人物，每個獨立一條
 - 若只有一個任務，也回傳長度為 1 的陣列
 
-【特殊規則 — podcast】
-若 agent_type 為 podcast，同一個 Podcast 題目的所有問題必須合成「一個任務」，
-instruction 必須是 JSON 字串（不是物件，是 json.dumps 後的字串），格式如下：
-  {{\"topic\": \"題目名稱\", \"questions\": [\"問題1\", \"問題2\", ...]}}
-不可把每個問題拆成獨立任務。
+【合併規則 — 重要】
+- 若多個敘述指向同一個研究對象（同一家公司、同一個人、同一個主題），必須合併成「一條任務」，把所有面向都寫進 instruction，不可拆開
+- 只有「不同對象」才各自獨立一條
+- 判斷標準：名稱相同 = 同對象；即使角度不同（業務/財務/競爭）也要合併
+- ✓ 合併範例：「查英維克的業務，再看它的財務，還有競爭對手」→ 一條 company_info
+- ✗ 拆開範例（錯誤）：「查英維克業務」+ 「查英維克財務」= 兩條（不可以）
+- ✓ 拆開範例（正確）：「查英維克」+「查林志明」= 兩條（不同對象）
 
 範例輸出：
 [
   {{
     "agent_type": "company_info",
-    "label": "英維克 (002837.SZ) — 業務結構、財務表現",
-    "instruction": "調查英維克（Envicool, 深圳上市 002837.SZ），重點放業務結構、財務表現與競爭優勢"
+    "label": "英維克 (002837.SZ) — 業務、財務、競爭",
+    "instruction": "調查英維克（Envicool, 深圳上市 002837.SZ），涵蓋業務結構、財務表現與競爭優勢"
   }},
   {{
-    "agent_type": "podcast",
-    "label": "Podcast：全球媒體產業",
-    "instruction": "{{\"topic\": \"全球媒體產業\", \"questions\": [\"問題1\", \"問題2\"]}}"
+    "agent_type": "translation",
+    "label": "翻譯：Bloomberg 科技文章",
+    "instruction": "翻譯附件文章，標題：AI Chip Race，來源：Bloomberg"
   }}
 ]
 """

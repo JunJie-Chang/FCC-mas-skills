@@ -65,6 +65,7 @@ _BLOCKED_HOMEPAGE_DOMAINS = {
 # ── State ─────────────────────────────────────────────────────────────────────
 
 class PodcastState(TypedDict):
+    task_instruction: str    # raw text from planner (empty when called via CLI)
     topic: str
     questions: list[str]
     intern_name: Union[str, list[str]]
@@ -289,6 +290,49 @@ def _intern_str(intern_name) -> str:
     return intern_name or config.DEFAULT_INTERN_NAME
 
 
+# ── Node 0: parse_instruction ────────────────────────────────────────────────
+
+def parse_instruction(state: PodcastState) -> dict:
+    """
+    Parse raw STT/text instruction into topic + questions.
+    No-op when topic is already set (CLI path: topic/questions passed directly).
+    """
+    if state.get("topic"):
+        return {}
+
+    raw = state.get("task_instruction", "").strip()
+    if not raw:
+        return {"topic": "未指定", "questions": []}
+
+    client = _get_client()
+    prompt = f"""你是一個 Podcast 研究任務解析助理。根據以下口述或文字指令，提取 Podcast 研究的主題與問題清單。
+
+指令原文：
+{raw}
+
+輸出規則：
+- topic：Podcast 的研究主題（一句話）
+- questions：問題清單（每個問題是一條字串）
+- 回傳純 JSON，不要 markdown 包裝
+
+格式：
+{{"topic": "主題名稱", "questions": ["問題1", "問題2", ...]}}
+"""
+    msg = client.messages.create(
+        model=config.LLM_FAST,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    from utils.cost_tracker import tracker
+    tracker.record_claude(config.LLM_FAST, msg.usage.input_tokens, msg.usage.output_tokens)
+    raw_out = next((b.text for b in msg.content if hasattr(b, "text")), "")
+    parsed = _parse_json(raw_out)
+    return {
+        "topic":     parsed.get("topic", "未指定"),
+        "questions": parsed.get("questions", []),
+    }
+
+
 # ── Node 1: generate_queries ──────────────────────────────────────────────────
 
 def generate_queries(state: PodcastState) -> dict:
@@ -452,14 +496,16 @@ def format_output(state: PodcastState) -> dict:
 
 def build_graph():
     graph = StateGraph(PodcastState)
-    graph.add_node("generate_queries", generate_queries)
-    graph.add_node("search_and_fetch", search_and_fetch)
-    graph.add_node("format_output",    format_output)
+    graph.add_node("parse_instruction", parse_instruction)
+    graph.add_node("generate_queries",  generate_queries)
+    graph.add_node("search_and_fetch",  search_and_fetch)
+    graph.add_node("format_output",     format_output)
 
-    graph.set_entry_point("generate_queries")
-    graph.add_edge("generate_queries", "search_and_fetch")
-    graph.add_edge("search_and_fetch", "format_output")
-    graph.add_edge("format_output",    END)
+    graph.set_entry_point("parse_instruction")
+    graph.add_edge("parse_instruction", "generate_queries")
+    graph.add_edge("generate_queries",  "search_and_fetch")
+    graph.add_edge("search_and_fetch",  "format_output")
+    graph.add_edge("format_output",     END)
 
     return graph.compile()
 
@@ -467,24 +513,30 @@ def build_graph():
 # ── Public entry point ────────────────────────────────────────────────────────
 
 def run(
-    topic: str,
-    questions: list[str],
+    task_instruction: str = "",
+    topic: str = "",
+    questions: list[str] = None,
     intern_name: Union[str, list[str]] = None,
     task_date: str = None,
     subdir: str = "weekly",
-    task_instruction: str = None,
 ) -> dict:
+    """
+    Two calling paths:
+      Planner path: run(task_instruction="口述原文...")
+      CLI path:     run(topic="...", questions=[...])
+    """
     app = build_graph()
     final_state = app.invoke({
-        "topic":       topic,
-        "questions":   questions,
-        "intern_name": intern_name or config.DEFAULT_INTERN_NAME,
-        "task_date":   task_date or date.today().strftime("%Y-%m-%d"),
-        "subdir":      subdir,
-        "queries":     [],
-        "articles":    [],
-        "output_path": "",
-        "log_path":    "",
+        "task_instruction": task_instruction,
+        "topic":            topic or "",
+        "questions":        questions or [],
+        "intern_name":      intern_name or config.DEFAULT_INTERN_NAME,
+        "task_date":        task_date or date.today().strftime("%Y-%m-%d"),
+        "subdir":           subdir,
+        "queries":          [],
+        "articles":         [],
+        "output_path":      "",
+        "log_path":         "",
     })
     return {
         "output_path": final_state["output_path"],
