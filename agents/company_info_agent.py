@@ -26,10 +26,10 @@ from langgraph.graph import END, StateGraph
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config
+import utils.react_loop as react_loop
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
-from utils.search import fetch_full_content, search
 
 load_dotenv(override=True)
 
@@ -42,6 +42,11 @@ class CompanyInfoState(TypedDict):
     task_date: str                         # YYYY-MM-DD
     subdir: str                            # output subfolder: daily / weekly / adhoc
     mode: str                              # "short" | "medium"
+    # ReAct loop state
+    todos: list[dict]                      # [{"id":int,"question":str,"status":"pending"|"done"|"unresolved","attempts":int}]
+    evidence: list[dict]                   # [{query, results:[...]}] accumulated across rounds
+    round: int                             # current loop iteration (0-indexed)
+    # Legacy / shared
     search_queries: list[str]
     search_results: list[dict]             # [{query, results:[{title,url,content,score}]}]
     financial_check: dict                  # {"q1":"Y"|"N","company_name":str,"q2":[tool_ids],"q3":{"needed":"Y"|"N","sector":str,"country":str}}
@@ -83,43 +88,94 @@ def _parse_json(text: str):
 
 # ── Node 1: parse_task ────────────────────────────────────────────────────────
 
+_MAX_ROUNDS = 6
+_COMPANY_SEARCH_HINT = (
+    "若任務有股票代碼，每條 query 都帶入；"
+    "優先搜財報、公告、投資人說明會、行業分析報告等一手來源"
+)
+
+
 def parse_task(state: CompanyInfoState) -> dict:
     """
-    Use claude-haiku to read the task instruction and generate
-    3-5 targeted Tavily search queries.
+    Use Haiku to build a research plan (todo list) from the task instruction.
+    Each todo is a specific question / fact to find.
+    Also generate the first batch of search queries.
     """
     client = _get_client()
 
-    prompt = f"""你是一個商業研究助理。根據以下任務指令，產生 3 到 5 個英文搜尋查詢（適合 Tavily），
-目標是找到完成這份報告所需的資訊。
+    prompt = f"""你是一個商業研究規劃師。根據以下任務指令，產出一份研究計劃。
 
 任務指令：{state['task_instruction']}
 
-規則：
-- 查詢語言用英文（搜尋效果更好）
-- 若任務指令有提供股票代碼（如 3017.TW、002837.SZ），每一條 query 都必須帶入該代碼，確保搜到正確公司
-- 每個查詢聚焦在不同面向（財務、業務、競爭等），不要重複
-- 回傳純 JSON 陣列，不要多餘說明
+輸出兩件事：
+1. todos：這份報告需要回答的具體問題清單（3-6 個）
+2. initial_queries：第一輪的搜尋查詢（英文，2-3 條）
 
-格式範例：
-["002837.SZ Envicool data center thermal management revenue", "002837.SZ Envicool liquid cooling business growth", "Shenzhen Envicool Technology competitive advantages IDC"]
+搜尋查詢設計原則（推論式，而非正面表述）：
+- 不要直接搜「XX 公司業務結構」，而是搜「XX annual report 2024」「XX investor presentation」「XX 10-K filing」
+- 不要搜「XX 競爭優勢」，而是搜「XX market share industry analysis」「XX vs competitors benchmark」
+- 目標：找到一手來源（財報、公司公告、行業報告），再從來源推斷答案
+- 若有股票代碼，每條 query 都帶入
+
+回傳純 JSON，格式：
+{{
+  "todos": [
+    {{"id": 1, "question": "公司的主要業務線和營收結構？"}},
+    {{"id": 2, "question": "最近兩個季度的財務表現（營收、利潤、成長率）？"}},
+    {{"id": 3, "question": "主要競爭對手和市場定位？"}}
+  ],
+  "initial_queries": [
+    "Envicool 002837.SZ annual report 2024 investor",
+    "liquid cooling data center China market share 2024"
+  ]
+}}
 """
 
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=512,
+        max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
 
     from utils.cost_tracker import tracker
     tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
 
-    queries = _parse_json(message.content[0].text)
+    parsed = _parse_json(message.content[0].text)
+    raw_todos = parsed.get("todos", [])
+    todos = [
+        {"id": t["id"], "question": t["question"], "status": "pending", "attempts": 0}
+        for t in raw_todos
+    ]
+    initial_queries = parsed.get("initial_queries", [])
 
-    return {"search_queries": queries}
+    return {
+        "todos":         todos,
+        "evidence":      [],
+        "round":         0,
+        "search_queries": initial_queries,
+        "search_results": [],
+    }
 
 
-# ── Node 1b: check_financial_need ────────────────────────────────────────────
+# ── ReAct loop nodes (thin wrappers over utils/react_loop) ───────────────────
+
+def run_search(state: CompanyInfoState) -> dict:
+    return react_loop.run_initial_search(state)
+
+def next_action(state: CompanyInfoState) -> dict:
+    return react_loop.next_action(state, max_rounds=_MAX_ROUNDS, search_hint=_COMPANY_SEARCH_HINT)
+
+def execute_search(state: CompanyInfoState) -> dict:
+    return react_loop.execute_search(state)
+
+def evaluate(state: CompanyInfoState) -> dict:
+    return react_loop.evaluate(state)
+
+def _should_continue(state: CompanyInfoState) -> str:
+    return react_loop.should_continue(state, max_rounds=_MAX_ROUNDS)
+
+
+# ── Financial nodes ────────────────────────────────────────────────────────────
 
 def check_financial_need(state: CompanyInfoState) -> dict:
     """
@@ -147,7 +203,7 @@ def check_financial_need(state: CompanyInfoState) -> dict:
 - Q1：任務對象是否包含特定上市櫃公司？回答 "Y" 或 "N"
 - Q2：若 Q1=Y，任務是否需要該公司的財務市場資料？從 Q2 工具清單選出需要的 id（可複選）；否則空陣列
 - company_name：若 Q1=Y，填最適合搜尋 ticker 的名稱（優先英文）；否則空字串
-- Q3：任務是否需要產業 / 地區的公司清單或掃描？若是，填 needed=Y 並指定 sector（英文產業名）與 country（英文國名，不限定則填 null）；否則 needed=N
+- Q3：任務是否需要產業 / 地區的公司清單或掃描？若是，填 needed=Y，並**必須**指定 sector（英文產業名）與 country（英文國名）；country 不可填 null，若任務未明示地區，請從 task context 推斷（CY / FCC Partners 業務以台灣、東南亞、香港為主，無法推斷時預設 "Taiwan"）；否則 needed=N
 - Q2 與 Q3 互相獨立，可同時觸發
 - 只在任務明確需要時才選工具；一般研究不需要
 - 回傳純 JSON，不要多餘說明
@@ -222,24 +278,6 @@ def fetch_sector_data(state: CompanyInfoState) -> dict:
     return {"sector_data": data}
 
 
-# ── Node 2: run_search ────────────────────────────────────────────────────────
-
-_RESULTS_PER_QUERY = 3   # configurable per agent
-
-
-def run_search(state: CompanyInfoState) -> dict:
-    """
-    Execute Tavily search for each query and collect results.
-    """
-    from utils.cost_tracker import tracker
-    all_results = []
-    for query in state["search_queries"]:
-        results = search(query, max_results=_RESULTS_PER_QUERY)
-        tracker.record_tavily(1)
-        all_results.append({"query": query, "results": results})
-    return {"search_results": all_results}
-
-
 # ── Node 3: generate_report ───────────────────────────────────────────────────
 
 def generate_report(state: CompanyInfoState) -> dict:
@@ -297,9 +335,11 @@ def generate_report(state: CompanyInfoState) -> dict:
 3. 每個 section 選擇最適合的呈現方式：
    - type "bullets"：適合事實性、條列式資訊（用 items 陣列）
    - type "paragraph"：適合分析性、敘述性內容（用 content 字串）
+   - type "table"：適合多筆同結構數值、比較性資料（用 headers 陣列 + rows 二維陣列）；例如：財務指標比較、多公司對照、歷年數據
 4. 語言：繁體中文，保留英文專有名詞（公司名、人名、產品名）；不要在任何名詞後加括號標注其他語言的原文或譯名（例如不要寫「環球集團（Global Group）」或「芽莊（Nha Trang）」，直接寫名稱本身）
 5. 精簡準確，不要堆砌廢話；不要在報告內容中提及任務指令的措辭、比喻或身份設定（例如不要出現「類似麥肯錫」、「根據您的要求」等）
 6. 財務數字優先採用結構化財務資料（yfinance）；Tavily 的財務數字僅作為背景參考，若與結構化資料矛盾，以結構化資料為準
+7. **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方公告為準」「資料可能有誤」「本報告基於公開資料」「無法保證準確性」或任何類似的 hedge / disclaimer 語句。FCC 內部研究文件不需要這些，直接陳述事實即可
 {mode_rules}
 
 JSON 格式：
@@ -315,19 +355,26 @@ JSON 格式：
       "heading": "節標題",
       "type": "paragraph",
       "content": "段落內容..."
+    }},
+    {{
+      "heading": "節標題",
+      "type": "table",
+      "headers": ["欄位一", "欄位二", "欄位三"],
+      "rows": [["A1", "A2", "A3"], ["B1", "B2", "B3"]]
     }}
   ]
 }}
 """
 
+    synthesis_model = config.LLM_MAIN if mode == "medium" else config.LLM_SYNTHESIS
     message = client.messages.create(
-        model=config.LLM_MAIN,
+        model=synthesis_model,
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
 
     from utils.cost_tracker import tracker
-    tracker.record_claude(config.LLM_MAIN, message.usage.input_tokens, message.usage.output_tokens)
+    tracker.record_claude(synthesis_model, message.usage.input_tokens, message.usage.output_tokens)
 
     report = _parse_json(message.content[0].text)
 
@@ -352,6 +399,8 @@ def format_output(state: CompanyInfoState) -> dict:
         if section["type"] == "bullets":
             for item in section.get("items", []):
                 builder.add_bullet(item)
+        elif section["type"] == "table":
+            builder.add_table(section.get("headers", []), section.get("rows", []))
         else:
             builder.add_paragraph(section.get("content", ""))
         builder.add_blank_line()
@@ -383,26 +432,47 @@ def format_output(state: CompanyInfoState) -> dict:
 
 def build_graph():
     graph = StateGraph(CompanyInfoState)
+
+    # ── Nodes ──────────────────────────────────────────────────────────────────
     graph.add_node("parse_task",           parse_task)
     graph.add_node("check_financial_need", check_financial_need)
     graph.add_node("fetch_financial_data", fetch_financial_data)
     graph.add_node("fetch_sector_data",    fetch_sector_data)
-    graph.add_node("run_search",           run_search)
+    graph.add_node("run_search",           run_search)       # initial batch
+    graph.add_node("evaluate",             evaluate)         # ReAct: assess progress
+    graph.add_node("next_action",          next_action)      # ReAct: plan next query
+    graph.add_node("execute_search",       execute_search)   # ReAct: run one query
     graph.add_node("generate_report",      generate_report)
     graph.add_node("format_output",        format_output)
 
+    # ── Edges ──────────────────────────────────────────────────────────────────
     graph.set_entry_point("parse_task")
-    graph.add_edge("parse_task",           "check_financial_need")
+
+    # Financial data (unchanged)
+    graph.add_edge("parse_task", "check_financial_need")
     graph.add_conditional_edges(
         "check_financial_need",
         lambda s: "fetch" if s["financial_check"].get("q2") else "skip",
         {"fetch": "fetch_financial_data", "skip": "fetch_sector_data"},
     )
     graph.add_edge("fetch_financial_data", "fetch_sector_data")
-    graph.add_edge("fetch_sector_data",    "run_search")
-    graph.add_edge("run_search",           "generate_report")
-    graph.add_edge("generate_report",      "format_output")
-    graph.add_edge("format_output",        END)
+
+    # Initial search batch → first evaluate
+    graph.add_edge("fetch_sector_data", "run_search")
+    graph.add_edge("run_search",        "evaluate")
+
+    # ReAct loop: evaluate → next_action → execute_search → evaluate (or done)
+    graph.add_conditional_edges(
+        "evaluate",
+        _should_continue,
+        {"loop": "next_action", "done": "generate_report"},
+    )
+    graph.add_edge("next_action",    "execute_search")
+    graph.add_edge("execute_search", "evaluate")
+
+    # Final synthesis
+    graph.add_edge("generate_report", "format_output")
+    graph.add_edge("format_output",   END)
 
     return graph.compile()
 
@@ -437,6 +507,9 @@ def run(
         "task_date": task_date or date.today().strftime("%Y-%m-%d"),
         "subdir": subdir,
         "mode": mode,
+        "todos":          [],
+        "evidence":       [],
+        "round":          0,
         "search_queries": [],
         "search_results": [],
         "financial_check": {},

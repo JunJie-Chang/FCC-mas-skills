@@ -25,10 +25,10 @@ from langgraph.graph import END, StateGraph
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import config
+import utils.react_loop as react_loop
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
-from utils.search import search
 
 load_dotenv(override=True)
 
@@ -41,6 +41,9 @@ class PersonInfoState(TypedDict):
     task_date: str
     subdir: str
     mode: str
+    todos: list[dict]
+    evidence: list[dict]
+    round: int
     search_queries: list[str]
     search_results: list[dict]
     report: dict
@@ -71,50 +74,88 @@ def _parse_json(text: str):
 
 # ── Node 1: parse_task ────────────────────────────────────────────────────────
 
+_MAX_ROUNDS = 5
+
+
 def parse_task(state: PersonInfoState) -> dict:
-    """Generate targeted search queries for person research."""
+    """Build a research plan (todo list) and initial search queries for person research."""
     client = _get_client()
 
-    prompt = f"""你是一個商業研究助理。根據以下任務指令，產生 3 到 5 個搜尋查詢（適合 Tavily），
-目標是找到這個人的背景、現職、公司關聯與產業位置。
+    prompt = f"""你是一個人物背景研究規劃師。根據以下任務指令，產出研究計劃。
 
 任務指令：{state['task_instruction']}
 
-規則：
-- 中文人名同時搜中文與英文拼音（如果知道）
-- 若有提供公司名稱或職稱，每條 query 都要帶入，確保搜到正確的人
-- 查詢方向涵蓋：工商登記（公司負責人）、現職/職稱、產業協會/公協會身份、新聞或公開資料
-- 回傳純 JSON 陣列，不要多餘說明
+輸出兩件事：
+1. todos：這份人物報告需要確認的具體問題（3-5 個）
+2. initial_queries：第一輪搜尋查詢（2-3 條，推論式設計）
 
-格式範例：
-["林振宏 大倡國際 董事長", "林振宏 台灣防火材料協會", "Ta-Chung International Lin Chen-hong chairman"]
+搜尋設計原則（推論式）：
+- 搜工商登記、公司官網、商業資料庫等一手來源，不要直接搜問題本身
+- 中文人名同時用中文與英文拼音查（若知道）
+- 若有提供公司名稱/職稱，每條 query 都帶入
+
+回傳純 JSON：
+{{
+  "todos": [
+    {{"id": 1, "question": "現任職稱與關聯公司？"}},
+    {{"id": 2, "question": "各公司的資本額與持股結構？"}},
+    {{"id": 3, "question": "產業協會或公協會身份？"}}
+  ],
+  "initial_queries": [
+    "林志明 大倡國際 董事長 工商登記",
+    "Ta-Chung International Lin Chih-ming chairman Taiwan"
+  ]
+}}
 """
 
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=512,
+        max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
 
     from utils.cost_tracker import tracker
     tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
 
-    return {"search_queries": _parse_json(message.content[0].text)}
+    parsed = _parse_json(message.content[0].text)
+    raw_todos = parsed.get("todos", [])
+    todos = [
+        {"id": t["id"], "question": t["question"], "status": "pending", "attempts": 0}
+        for t in raw_todos
+    ]
+    return {
+        "todos":          todos,
+        "evidence":       [],
+        "round":          0,
+        "search_queries": parsed.get("initial_queries", []),
+        "search_results": [],
+    }
 
 
 # ── Node 2: run_search ────────────────────────────────────────────────────────
 
-_RESULTS_PER_QUERY = 3
+_PERSON_SEARCH_HINT = (
+    "搜工商登記、商業資料庫、新聞、官方公告等一手來源；"
+    "中文人名同時用中文與英文拼音查"
+)
 
+
+# ── ReAct loop nodes (thin wrappers over utils/react_loop) ───────────────────
 
 def run_search(state: PersonInfoState) -> dict:
-    from utils.cost_tracker import tracker
-    all_results = []
-    for query in state["search_queries"]:
-        results = search(query, max_results=_RESULTS_PER_QUERY)
-        tracker.record_tavily(1)
-        all_results.append({"query": query, "results": results})
-    return {"search_results": all_results}
+    return react_loop.run_initial_search(state)
+
+def next_action(state: PersonInfoState) -> dict:
+    return react_loop.next_action(state, max_rounds=_MAX_ROUNDS, search_hint=_PERSON_SEARCH_HINT)
+
+def execute_search(state: PersonInfoState) -> dict:
+    return react_loop.execute_search(state)
+
+def evaluate(state: PersonInfoState) -> dict:
+    return react_loop.evaluate(state)
+
+def _should_continue(state: PersonInfoState) -> str:
+    return react_loop.should_continue(state, max_rounds=_MAX_ROUNDS)
 
 
 # ── Node 3: generate_report ───────────────────────────────────────────────────
@@ -155,9 +196,11 @@ def generate_report(state: PersonInfoState) -> dict:
 3. 每個 section 選擇最適合的呈現方式：
    - type "bullets"：條列式事實（職稱、資本額、董監事組成等）
    - type "paragraph"：定位說明或分析性描述
+   - type "table"：多筆同結構比較資料（如：多家關聯公司的資本額/持股比例對照）
 4. 若搜尋資料不足，據實標注「資料不足，無法確認」，不要捏造
 5. 語言：繁體中文，保留英文專有名詞與公司名；不要在任何名詞後加括號標注其他語言的原文或譯名（不論英文、越南文或其他語言），直接寫名稱本身
 6. 不要在報告內容中提及任務指令的措辭、比喻或身份設定
+7. **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方公告為準」「資料可能有誤」「本報告基於公開資料」「無法保證準確性」或任何類似的 hedge / disclaimer 語句，直接陳述事實即可
 {mode_rules}
 
 JSON 格式：
@@ -173,19 +216,26 @@ JSON 格式：
       "heading": "另一個組織",
       "type": "paragraph",
       "content": "說明..."
+    }},
+    {{
+      "heading": "關聯公司總覽",
+      "type": "table",
+      "headers": ["公司", "職稱", "資本額", "備註"],
+      "rows": [["公司A", "董事長", "2.3億", "主要控股"]]
     }}
   ]
 }}
 """
 
+    synthesis_model = config.LLM_MAIN if mode == "medium" else config.LLM_SYNTHESIS
     message = client.messages.create(
-        model=config.LLM_MAIN,
+        model=synthesis_model,
         max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
 
     from utils.cost_tracker import tracker
-    tracker.record_claude(config.LLM_MAIN, message.usage.input_tokens, message.usage.output_tokens)
+    tracker.record_claude(synthesis_model, message.usage.input_tokens, message.usage.output_tokens)
 
     return {"report": _parse_json(message.content[0].text)}
 
@@ -204,6 +254,8 @@ def format_output(state: PersonInfoState) -> dict:
         if section["type"] == "bullets":
             for item in section.get("items", []):
                 builder.add_bullet(item)
+        elif section["type"] == "table":
+            builder.add_table(section.get("headers", []), section.get("rows", []))
         else:
             builder.add_paragraph(section.get("content", ""))
         builder.add_blank_line()
@@ -225,16 +277,26 @@ def format_output(state: PersonInfoState) -> dict:
 
 def build_graph():
     graph = StateGraph(PersonInfoState)
-    graph.add_node("parse_task", parse_task)
-    graph.add_node("run_search", run_search)
+    graph.add_node("parse_task",     parse_task)
+    graph.add_node("run_search",     run_search)
+    graph.add_node("evaluate",       evaluate)
+    graph.add_node("next_action",    next_action)
+    graph.add_node("execute_search", execute_search)
     graph.add_node("generate_report", generate_report)
-    graph.add_node("format_output", format_output)
+    graph.add_node("format_output",  format_output)
 
     graph.set_entry_point("parse_task")
-    graph.add_edge("parse_task", "run_search")
-    graph.add_edge("run_search", "generate_report")
+    graph.add_edge("parse_task",  "run_search")
+    graph.add_edge("run_search",  "evaluate")
+    graph.add_conditional_edges(
+        "evaluate",
+        _should_continue,
+        {"loop": "next_action", "done": "generate_report"},
+    )
+    graph.add_edge("next_action",    "execute_search")
+    graph.add_edge("execute_search", "evaluate")
     graph.add_edge("generate_report", "format_output")
-    graph.add_edge("format_output", END)
+    graph.add_edge("format_output",  END)
 
     return graph.compile()
 
@@ -256,6 +318,9 @@ def run(
         "task_date": task_date or date.today().strftime("%Y-%m-%d"),
         "subdir": subdir,
         "mode": mode,
+        "todos":          [],
+        "evidence":       [],
+        "round":          0,
         "search_queries": [],
         "search_results": [],
         "report": {},
