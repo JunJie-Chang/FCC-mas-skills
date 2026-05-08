@@ -56,6 +56,10 @@ def dispatch(
         from agents.person_info_agent import run
         return run(**kwargs)
 
+    elif agent_type == "sector_scan":
+        from agents.sector_scan_agent import run
+        return run(**kwargs)
+
     elif agent_type == "translation":
         from agents.translation_agent import run
         # translation_agent requires title/source/body_text explicitly;

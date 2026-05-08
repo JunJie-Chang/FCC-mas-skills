@@ -47,6 +47,50 @@ TOOL_DESCRIPTIONS = YFINANCE_TOOL_DESCRIPTIONS
 _CALL_DELAY = 1.5   # seconds between yfinance API calls
 
 
+# ── FinanceDatabase enum cache ───────────────────────────────────────────────
+
+_FDB_ENUM_CACHE: dict | None = None
+
+
+def get_fdb_enum() -> dict:
+    """
+    Load FinanceDatabase's available sector / industry_group / industry /
+    country / exchange values into a cached dict.
+
+    Cached on disk at utils/_fdb_enum.json so subsequent calls are zero-cost.
+    Delete that file to refresh. Used by sector_scan agent so its prompt
+    can constrain Haiku to selecting from a fixed enum (no free-form input
+    that would produce illegal queries like industry='semiconductor company').
+    """
+    global _FDB_ENUM_CACHE
+    if _FDB_ENUM_CACHE is not None:
+        return _FDB_ENUM_CACHE
+
+    import json
+    from pathlib import Path
+    cache_path = Path(__file__).parent / "_fdb_enum.json"
+    if cache_path.exists():
+        _FDB_ENUM_CACHE = json.loads(cache_path.read_text(encoding="utf-8"))
+        return _FDB_ENUM_CACHE
+
+    import financedatabase as fd
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        eq = fd.Equities()
+        _FDB_ENUM_CACHE = {
+            "sectors":         sorted(eq.show_options("sector").tolist()),
+            "industry_groups": sorted(eq.show_options("industry_group").tolist()),
+            "industries":      sorted(eq.show_options("industry").tolist()),
+            "countries":       sorted(eq.show_options("country").tolist()),
+            "exchanges":       sorted(eq.show_options("exchange").tolist()),
+        }
+    cache_path.write_text(
+        json.dumps(_FDB_ENUM_CACHE, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return _FDB_ENUM_CACHE
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _safe(fn, *args, **kwargs) -> Any:

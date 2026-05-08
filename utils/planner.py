@@ -39,6 +39,7 @@ import config
 AGENT_TYPES = {
     "company_info":    "公司/機構背景調查",
     "person_info":     "人物背景調查",
+    "sector_scan":     "結構化資料調查（產業 / 地區公司清單排名 + 多公司比較）",
     "translation":     "文章或文件翻譯",
     "letter":          "口述信件整理（音檔）",
     "meeting":         "會議記錄整理（音檔）",
@@ -137,12 +138,23 @@ def parse_tasks(
 - ✗ 拆開範例（錯誤）：「查英維克業務」+ 「查英維克財務」= 兩條（不可以）
 - ✓ 拆開範例（正確）：「查英維克」+「查林志明」= 兩條（不同對象）
 
+【sector_scan vs company_info 判斷】
+- sector_scan：對「N 家公司」做同欄位比較或排名。任務句型常含「前十大 / Top X / 列出 / 排名 / 比較 / 哪些公司」+「同產業／同地區」+「市值 / PE / 營收」這類數值維度
+- company_info：對「單一公司或機構」做研究，即使涉及財務數字也是該公司本身
+- 例子：「列出台灣前十大半導體公司並比較市值」→ sector_scan
+- 例子：「調查台積電的最新財報與 AI 客戶」→ company_info（單一公司）
+
 範例輸出：
 [
   {{
     "agent_type": "company_info",
     "label": "英維克 (002837.SZ) — 業務、財務、競爭",
     "instruction": "調查英維克（Envicool, 深圳上市 002837.SZ），涵蓋業務結構、財務表現與競爭優勢"
+  }},
+  {{
+    "agent_type": "sector_scan",
+    "label": "台灣半導體 Top 10（市值排名）",
+    "instruction": "列出台灣前十大半導體公司，比較市值、PE 與近三個月股價漲跌幅"
   }},
   {{
     "agent_type": "translation",
@@ -196,8 +208,61 @@ def _print_tasks(tasks: list[PlanTask]) -> None:
         print(f"  {i}.  {type_tag}  {task.label}")
         print(f"       ↳ {task.instruction}")
     print("─" * 70)
-    print("  y=確認執行  n=取消  [數字]=修改  d[數字]=刪除  a=新增")
+    print("  y=確認執行  n=取消  [數字]=修改  d[數字]=刪除  a=新增  m a,b[,c]=合併")
     print("─" * 70)
+
+
+def _merge_tasks_via_haiku(selected: list[PlanTask]) -> PlanTask:
+    """
+    Ask Haiku to merge N task instructions into one, preserving every facet.
+    agent_type is decided by majority vote (ties → first selected task's type).
+    """
+    from collections import Counter
+
+    type_votes = Counter(t.agent_type for t in selected)
+    most_common = type_votes.most_common()
+    top_count = most_common[0][1]
+    tied = [t for t, c in most_common if c == top_count]
+    # If a tie, prefer the agent_type of the first selected task (preserves user intent ordering)
+    merged_type = (
+        selected[0].agent_type if selected[0].agent_type in tied else tied[0]
+    )
+
+    bullets = "\n".join(
+        f"{i+1}. [{t.agent_type}] {t.instruction}"
+        for i, t in enumerate(selected)
+    )
+
+    prompt = f"""你是任務合併助理。把以下 {len(selected)} 條指令合併成一條，保留所有面向。
+
+指令清單：
+{bullets}
+
+輸出規則：
+- 合併後的 instruction 必須涵蓋所有面向（不可省略任何細節）
+- 不要重複措辭，整合成自然的研究指令
+- label 為簡短繁體中文標籤
+- 回傳純 JSON：{{"label": "...", "instruction": "..."}}
+"""
+
+    client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    msg = client.messages.create(
+        model=config.LLM_FAST,
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = msg.content[0].text.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw).strip()
+    m = re.search(r"\{[\s\S]*\}", raw)
+    if m:
+        raw = m.group(0)
+    data = json.loads(raw)
+    return PlanTask(
+        agent_type  = merged_type,
+        label       = data["label"],
+        instruction = data["instruction"],
+    )
 
 
 def confirm(tasks: list[PlanTask]) -> list[PlanTask] | None:
@@ -251,6 +316,33 @@ def confirm(tasks: list[PlanTask]) -> list[PlanTask] | None:
             else:
                 print(f"  無效編號：{raw[1:]}")
 
+        # ── merge ─────────────────────────────────────────────────
+        elif re.fullmatch(r"m\s+[\d,\s]+", raw.lower()):
+            try:
+                idx_strs = re.findall(r"\d+", raw)
+                indices = sorted({int(s) - 1 for s in idx_strs})
+            except ValueError:
+                print(f"  無效格式，請使用 m a,b[,c] 形式")
+                continue
+            if len(indices) < 2:
+                print(f"  合併至少需要 2 個任務編號")
+                continue
+            if any(i < 0 or i >= len(tasks) for i in indices):
+                print(f"  無效編號，超出範圍")
+                continue
+            selected = [tasks[i] for i in indices]
+            print(f"  合併 {len(selected)} 條任務（Haiku 處理中…）")
+            try:
+                merged = _merge_tasks_via_haiku(selected)
+            except Exception as exc:
+                print(f"  合併失敗：{exc}")
+                continue
+            # Replace at lowest index, remove the others (delete from highest first)
+            for i in sorted(indices, reverse=True):
+                tasks.pop(i)
+            tasks.insert(indices[0], merged)
+            print(f"  ✓ 已合併為：[{merged.agent_type}] {merged.label}")
+
         # ── edit ──────────────────────────────────────────────────
         elif re.fullmatch(r"\d+", raw):
             idx = int(raw) - 1
@@ -274,4 +366,4 @@ def confirm(tasks: list[PlanTask]) -> list[PlanTask] | None:
                 print(f"  無效編號：{raw}")
 
         else:
-            print("  請輸入 y / n / 數字 / d數字 / a")
+            print("  請輸入 y / n / 數字 / d數字 / a / m a,b[,c]")

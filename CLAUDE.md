@@ -40,6 +40,10 @@ python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --pdf ~/Dow
 # 直接跑單一 agent
 python3.13 agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
 
+# 結構化資料調查（產業 / 地區 Top N + 多公司比較）
+python3.13 agents/sector_scan_agent.py --task "列出台灣前十大半導體公司，比較市值與 PE" --intern "Justin"
+python3.13 main.py --input "列出香港金融業前 20 家，按市值排序" --type sector_scan --intern "Justin"
+
 # Podcast agent 直接執行（--questions 用分號分隔，不是 JSON array）
 python3.13 agents/podcast_agent.py \
   --topic "全球媒體產業" \
@@ -75,7 +79,7 @@ STT (utils/stt.py)
     ↓
 parse_tasks() (utils/planner.py) — haiku 解析 + 分類，max_tokens=4096
     ↓
-confirm() — CLI 互動：y 確認 / n 取消 / [數字] 修改 / d[數字] 刪除 / a 新增
+confirm() — CLI 互動：y 確認 / n 取消 / [數字] 修改 / d[數字] 刪除 / a 新增 / m a,b[,c] 合併
     ↓
 router.dispatch(task, intern_name, task_date, subdir, mode)
     ↓
@@ -85,8 +89,9 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### Agent 清單
 | agent_type | 檔案 | 說明 |
 |---|---|---|
-| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，7-node graph（含財務資料層） |
-| `person_info` | `agents/person_info_agent.py` | 人物背景，4-node graph |
+| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，10-node graph（含財務資料層 + ReAct loop） |
+| `person_info` | `agents/person_info_agent.py` | 人物背景，8-node ReAct loop graph |
+| `sector_scan` | `agents/sector_scan_agent.py` | 結構化資料調查（產業 + 地區 Top N + 多公司比較）；FDB enum 作前置 gate，不可行任務直接出 note doc |
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
@@ -110,6 +115,17 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 **company_info loop 控制**：`MAX_ROUNDS=6`（hard cap）；所有 todo 皆 done 或 unresolved 提前結束；連續 2 輪 0 結果（stall）強制結束
 
 **person_info**（8-node LangGraph，同 ReAct loop）：同 company_info，無財務資料層（無 check_financial_need / fetch_financial_data / fetch_sector_data）；`MAX_ROUNDS=5`
+
+**sector_scan**（4-node LangGraph，conditional edge）：
+1. `parse_request` — Haiku 拿 `get_fdb_enum()` 載入的 enum，做 feasibility 判斷 + 鎖定 `industry / country / top_n / rank_by / metrics`；defensive 二次驗證 Haiku 給的 industry 真的在 enum 內，否則自動翻 N
+2. conditional edge `_is_feasible` — Y → `fetch_companies`；N → `format_output` 出 note doc 建議走 `company_info` + Tavily fallback
+3. `fetch_companies` — `fetch_sector_scan(industry, country, limit=top_n*3)` over-fetch 3x 抗 yfinance miss
+4. `enrich_metrics` — 對每個 ticker 呼叫 yfinance（`_PER_TICKER_DELAY=1.5s`），按 `rank_by` 排序，截 `top_n`
+5. `format_output` — 摘要段 + Table Grid 表格；數值格式化（B for billions / x for PE / +%.2f% for change_3mo）
+
+**sector_scan 任務分類觸發**：planner Haiku 看到「前十大 / Top X / 列出 / 排名 / 比較 / 哪些公司」+「同產業／同地區」+「市值 / PE / 營收」即優先選 `sector_scan`；單一公司研究即使含財務數字仍走 `company_info`。
+
+**sector_scan 不可行的判斷**：FinanceDatabase 沒有對應分類的請求（如「AI 概念股」「重電股」「綠能新貴」「年終排名」），Haiku 設 `feasible=N`，graph 直接跳 `format_output` 出 note doc 建議 fallback。
 
 **speech_ppt**（4-node LangGraph）：
 1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
@@ -148,7 +164,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 **各 agent 的包裝方式**：每個 agent 定義 `_MAX_ROUNDS` 和 `_SEARCH_HINT` 常數，再用薄包裝函式呼叫 react_loop 的 public API，讓 LangGraph 拿到正確的 TypedDict 型別標注。新增同樣需要 ReAct loop 的 research agent 時直接 import 並包裝，不需修改 react_loop.py。
 
 ### router → agent 的 mode 傳遞規則
-- `company_info` / `person_info` / `dictation`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
+- `company_info` / `person_info` / `dictation` / `sector_scan`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
 - `podcast` / `speech_ppt` / `translation`：router 個別傳參，不走 `**kwargs`，不需要 `mode`
 - 新增走 `**kwargs` 路徑的 agent，`run()` 必須接受 `mode: str = "short"` 以免 TypeError
 
@@ -159,16 +175,32 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 - 頁面：A4，margins top/bottom=2.5cm, left/right=3.2cm
 - 頁面邊框：四邊 single，sz=12，space=24，offsetFrom=page
 - Header：右對齊「Private & Confidential」，11pt Bold 紅色斜體
+- 表格：`add_table()` 套 `Table Grid` style → 內外四邊細黑線
+- Podcast 文章標題：`add_red_underline_title_with_subtitle(title, subtitle)` 產出紅字 Bold underline 主標 + soft break (`w:br` = shift+enter) + 黑字副標（格式 `YYYY.MM.DD_intern_媒體_作者`，缺欄位略過）
 - `save()` 自動複製到 `~/Downloads`，無 PDF 輸出（已廢棄移除）
 - 命名：`YYYY.MM.DD_TaskName_InternName.docx`（`utils/file_naming.general()` 產生）
 
 ### generate_report Prompt 規則（所有 agent 適用）
+- **時間錨點**：所有 prompt 開頭注入 `config.time_context()`（「現在是 YYYY 年；t=YYYY / t-1=... / t-2=...」），避免模型把訓練 cutoff 年份（常為 2024）當作 t
 - 不在任何名詞後加括號標注其他語言的原文或譯名（不論英文、越南文或任何語言）
 - 不在報告內容中提及任務指令的措辭、比喻或身份設定
 - **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方為準」「資料可能有誤」等 hedge / disclaimer
+- **禁用空洞修辭清單**：禁用「成長雙位數」「戰略佈局」「行業領先」「持續優化」等沒有資訊量的詞；必須給具體數字 / 名稱 / 日期，evidence 沒有就明寫「資料不足」
+- **yfinance 引用必附日期**：股價用 `as_of` 欄位，財報數字用 `period_end` 欄位（如「2026 Q1（截至 2026-03-31）」「截至 2026-05-07」）
 - **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁；合成用 `LLM_SYNTHESIS`（Sonnet）
 - **Medium mode**：section 數量不限，可延伸分析；合成用 `LLM_MAIN`（Opus）
 - **Section types**：`bullets`（條列）/ `paragraph`（敘述）/ `table`（多欄比較，含 headers + rows）；Sonnet/Opus 自選最合適的
+
+### 時間錨點 helper（`config.time_context()`）
+所有觸及「最新」「最近一季」「去年」「年初至今」等相對時間的 LLM prompt 都要在開頭注入 `config.time_context()`。注入點：
+- `utils/planner.py` parse_tasks
+- `agents/company_info_agent.py` parse_task / generate_report
+- `agents/person_info_agent.py` parse_task / generate_report
+- `utils/react_loop.py` next_action / evaluate
+- `agents/podcast_agent.py` generate_queries
+- `agents/sector_scan_agent.py` parse_request
+
+新增有時間敏感性的 prompt 時務必加注入。
 
 ### Word 輸出不含 references
 `company_info` / `person_info` 的 Word 文件**不含**內文引用標記（`[N]`）和「參考來源」section。來源資訊只存於 `.log` sidecar，不出現在文件裡。`WordBuilder.add_references()` 方法仍存在於 formatter，但這兩個 agent 不呼叫它。
@@ -176,11 +208,24 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ### podcast 的 planner 特殊規則
 `podcast` 屬 `_MANUAL_ONLY_TYPES`，Haiku 不自動分類。必須 `--type podcast`。`parse_tasks()` early return：raw 原文原封不動傳給 agent，不被 Haiku 改寫。topic/questions 解析在 agent 內的 `parse_instruction` node（Haiku）執行。router 直接傳 `task_instruction=raw`，不再解析 JSON。
 
-### podcast 的 domain 過濾
-`_BLOCKED_DOMAINS` 封社群 / 低品質站（Facebook、Twitter / X、Instagram、TikTok、Reddit 等）；`_BLOCKED_HOMEPAGE_DOMAINS`（YouTube、LinkedIn）只封首頁（`path in ("", "/")`），放行 `/watch`、`/posts/` 等內容路徑。原因：這兩個網站是 podcast 訪談原生平台，完全封鎖會漏掉主要來源。新增 podcast 常見平台時先評估是要完全封還是只封首頁。
+### podcast 的 domain 過濾與白名單
+**兩層過濾**：
+1. `_BLOCKED_DOMAINS`：完全封 — 社群 / 影音 / 低品質站。包含 Facebook、Twitter/X、Instagram、TikTok、Reddit、Weibo、微信、Threads 以及 **YouTube、LinkedIn**（podcast 任務只要文字稿，影音 / 社交不夠正式）
+2. `_NEWS_WHITELIST`：~38 站新聞白名單，分四層 — 台灣主流（cna / ctee / udn / ltn / chinatimes / ettoday / bnext / 商周 / 財訊 / 天下 等）/ 台灣產業專業（digitimes / ithome / techorange / inside / 36kr）/ 國際中文（BBC / 紐時中文 / RFA / VOA / DW / 財新 / 21 經濟 等）/ 國際英文（reuters / bloomberg / ft / nytimes / wsj / nikkei / techcrunch / scmp 等）
+
+**過濾流程**：
+- url 在 `_BLOCKED_DOMAINS` → skip
+- 字數 < `_MIN_ARTICLE_CHARS=50` → skip（只擋明顯 snippet stub）
+- url 在 `_NEWS_WHITELIST` → 接收 + 標 verified
+- url 不在白名單也不在 blocked → 接收但 `.log` 標 `[unverified_source]`（給校稿用）
+
+新增白名單站時，加進對應分類即可，不需改邏輯。
 
 ### confirm() 的範圍限制
 `planner.confirm()` 展示的是 Haiku 解析出的 `task.instruction`，讓使用者在執行前確認或修改。**Tavily 搜尋 queries 是在 confirm 之後、agent Node 1 內部才生成**，使用者看不到。若 query 生成跑偏（如研究對象被誤解為產業生態），只能在 confirm 階段透過修改 instruction 間接影響。
+
+### confirm() 的 merge 指令
+使用者輸入 `m a,b[,c]`（如 `m 1,3` 或 `m 1,3,5`），planner 把指定編號的多個 PlanTask 透過 Haiku 合併成一條，agent_type 採多數決（平手保留第一個任務的 type 維持順序意圖）。合併結果插回最低 index 位置，其餘 pop 掉。用於救「同主題被 Haiku 誤拆」的情境（補強 planner 內建合併規則的盲點）。
 
 ### verbal_cleanup 必須手動指定
 `verbal_cleanup` 在 `_MANUAL_ONLY_TYPES`，Haiku 不會自動分類到這個 type。必須用 `--type verbal_cleanup` 明確指定，否則會被分類成其他 agent。
@@ -207,8 +252,10 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 | 問題 | 判斷內容 | 觸發 node | 資料來源 |
 |---|---|---|---|
-| Q1 + Q2 | 特定上市公司 + 需要財務數據 | `fetch_financial_data` | yfinance |
+| Q1 + Q2 | 任務「明確需要」該公司的市場交易資料（股價/估值/財報數字） | `fetch_financial_data` | yfinance |
 | Q3 | 需要產業 / 地區公司清單 | `fetch_sector_data` | FinanceDatabase |
+
+**Q1 收緊條件（wave 2）**：明列 Y 觸發詞（股價 / 市值 / PE / EV/EBITDA / 股息 / 最新財報數字 / 機構持股 / Yahoo 新聞）、N 條件（純業務面研究即使帶 ticker 也 N）、保守原則（不確定 → N）。意圖：避免每個帶公司名的任務都觸發財務層。
 
 **Q2 工具**（`YFINANCE_TOOL_DESCRIPTIONS` / `TOOL_REGISTRY`）：
 - `stock_price` — 近 3 個月股價走勢、現價、52 週高低
@@ -226,12 +273,22 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 Financial / sector data 以結構化 JSON 注入 `generate_report` context；財務數字優先採用 yfinance，Tavily 數字僅作背景參考。所有 fetched data 同時寫入 `.log` sidecar（`--- Financial Data ---` / `--- Sector Data ---` 區塊）。
 
-**Ticker 解析流程（三段 fallback）**：`resolve_ticker(company_name, task_context)` 依序嘗試：
-1. `_haiku_normalize_ticker` — Haiku 讀公司名 + task 內容，直接輸出 market-correct ticker（懂 .TW / .TWO / .HK / .SZ / .SS / .T / .KS / 美股字母）；`confidence=low` 視為 None 不採用
-2. `yf.Search` — yfinance 模糊比對
-3. FinanceDatabase `Equities().search`
+**Ticker 解析（`resolve_ticker(strict=True)` 為新預設）**：
 
-三段都失敗才回 None，`fetch_financial_data` 把 `financial_data` 設為 `{"_ticker_error": "..."}`，log sidecar 寫 `--- Financial Data (not fetched) ---` 並印 WARNING。
+`strict=True`（預設，給 `fetch_financial_data` 用）：
+- `_haiku_normalize_ticker(strict=True)` — Haiku 必須 `confidence=high` 且 ticker 通過 `_VALID_TICKER_RE`（US ≤5 字母 / `.TW/.TWO/.HK/.SZ/.SS/.T/.KS/.L/.TO/.AX/.PA/.DE` 等市場後綴）；medium 直接擋掉
+- 不走 yf.Search / FinanceDatabase fuzzy fallback — 寧可跳過財務層，也不餵 yfinance 非法 symbol（如 `industry='semiconductor company'`）
+
+`strict=False`（legacy 路徑，可給未來 discovery / sector 用）：
+- 三段 fallback：Haiku（high+medium）→ yf.Search → FinanceDatabase
+
+**`as_of` / `period_end` 欄位（wave 1）**：
+- `fetch_stock_price` payload 含 `as_of` = last bar 日期（YYYY-MM-DD，不是 fetch 時間）
+- `fetch_financials` 含 `period_end` dict（`income_stmt_latest_q` / `balance_sheet_latest_q` / `cashflow_latest_q` 各自的期末日）
+- 其餘 fetcher 含 `as_of` = Asia/Taipei fetch 時間
+- `generate_report` prompt 強制：引用 yfinance 數字必附資料日期
+
+**FDB enum cache（`get_fdb_enum()`）**：一次性載入 FinanceDatabase 的 sector / industry_group / industry / country / exchange enum，cache 到 `utils/_fdb_enum.json`（committed for fresh-checkout convenience）。`sector_scan_agent` 用這個 cache 把 enum 列進 prompt，讓 Haiku 只能逐字選用，杜絕非法 industry 值。需要 refresh 時刪掉 JSON 即可。
 
 **Data source self-declaring**：每個 fetcher 透過 `_tag_source()` 在成功 payload 加 `"_source": "yfinance"` 或 `"FinanceDatabase"`。`utils/logger.py` 讀每筆 payload 的 `_source`，動態產生 log label（例：`--- Financial Data (yfinance: stock_price, key_metrics) ---`），不再 hardcode。新增跨資料源 fetcher 時務必呼叫 `_tag_source()`。
 
