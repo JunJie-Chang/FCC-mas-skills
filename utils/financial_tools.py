@@ -10,6 +10,7 @@ Tool catalogue split by data source:
 
 Rate limiting: _CALL_DELAY seconds are inserted between successive API calls.
 """
+import re
 import time
 import warnings
 from datetime import datetime, timezone
@@ -64,12 +65,38 @@ def _ticker(symbol: str):
 
 # ── Ticker resolution ─────────────────────────────────────────────────────────
 
-def _haiku_normalize_ticker(company_name: str, task_context: str = "") -> str | None:
+# Strict mode: require ticker to match one of these patterns. Anything else
+# (free-form names, partial codes) is rejected to prevent illegal symbols like
+# "Semiconductor company" leaking into yfinance calls.
+_VALID_TICKER_RE = re.compile(
+    r"^("
+    r"[A-Z0-9]{1,5}"                  # US (TSLA, NVDA, BRK.B handled below via .)
+    r"|[A-Z0-9.\-]{1,8}\.(TW|TWO|HK|SZ|SS|T|KS|L|TO|AX|PA|DE|MI|MX|SA|F)"
+    r")$"
+)
+
+
+def _is_valid_ticker_format(ticker: str) -> bool:
+    """Strict ticker format check — used to reject Haiku hallucinations."""
+    if not ticker or not isinstance(ticker, str):
+        return False
+    return bool(_VALID_TICKER_RE.match(ticker.strip().upper()))
+
+
+def _haiku_normalize_ticker(
+    company_name: str, task_context: str = "", strict: bool = True,
+) -> str | None:
     """
     Ask Haiku to output a market-correct ticker directly from a company name
     (handles 中/英文 + 跨市場 suffix: .TW/.TWO/.HK/.SZ/.SS/純字母 US).
-    Returns None when Haiku is unsure — caller should fall through to
-    yf.Search / FinanceDatabase.
+
+    Args:
+        strict: When True (default), only accept confidence='high' AND ticker
+                matching a known market-suffix pattern. When False, accept
+                medium-confidence too and skip format check.
+
+    Returns None when Haiku is unsure — caller should (in strict mode) accept
+    the rejection rather than fall through to fuzzy matching.
     """
     import json as _json
     import os
@@ -124,27 +151,49 @@ def _haiku_normalize_ticker(company_name: str, task_context: str = "") -> str | 
         data = _json.loads(text)
         ticker = data.get("ticker")
         confidence = data.get("confidence", "low")
-        if ticker and confidence in ("high", "medium"):
-            return ticker
+        if not ticker:
+            return None
+        # Confidence threshold: strict requires "high"; legacy accepts medium too
+        allowed_conf = ("high",) if strict else ("high", "medium")
+        if confidence not in allowed_conf:
+            return None
+        # Format gate: strict mode rejects anything that doesn't look like a ticker
+        if strict and not _is_valid_ticker_format(ticker):
+            print(f"[financial_tools] ⚠ rejecting Haiku ticker {ticker!r} (format)")
+            return None
+        return ticker
     except Exception as exc:
         print(f"[financial_tools] ⚠ Haiku ticker normalize failed: {exc}")
 
     return None
 
 
-def resolve_ticker(company_name: str, task_context: str = "") -> str | None:
+def resolve_ticker(
+    company_name: str, task_context: str = "", strict: bool = True,
+) -> str | None:
     """
     Try to find a ticker symbol for company_name.
-    Strategy 0: Haiku normalizer (best for 中文 / 跨市場 suffix)
-    Strategy 1: yfinance Search (fast, covers most major markets)
-    Strategy 2: FinanceDatabase equity search (broader but slower)
-    Returns the best-guess symbol string, or None if nothing found.
+
+    strict=True (default for financial-data fetching): only Haiku high-confidence
+    + valid format. No fuzzy fallbacks — better to skip the financial layer than
+    feed yfinance an illegal symbol from a fuzzy match.
+
+    strict=False (legacy / discovery use): three-tier fallback —
+      Strategy 0: Haiku normalizer (medium+ confidence accepted)
+      Strategy 1: yfinance Search (fuzzy, covers most major markets)
+      Strategy 2: FinanceDatabase equity search (broader but slower)
+
+    Returns the symbol string, or None if not resolvable under the chosen mode.
     """
-    # Strategy 0 — Haiku normalizer
-    symbol = _haiku_normalize_ticker(company_name, task_context)
+    # Strategy 0 — Haiku normalizer (works in both modes)
+    symbol = _haiku_normalize_ticker(company_name, task_context, strict=strict)
     if symbol:
         print(f"[financial_tools] Haiku → {symbol}")
         return symbol
+
+    if strict:
+        # No fuzzy fallback in strict mode — caller will skip financial fetching
+        return None
 
     # Strategy 1 — yfinance Search
     def _yf_search():

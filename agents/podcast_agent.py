@@ -44,22 +44,50 @@ load_dotenv(override=True)
 
 _RESULTS_PER_QUESTION = 3    # final articles per question
 _SEARCH_FETCH_EXTRA   = 4    # extra results to fetch to survive filter + dedup
-_MIN_ARTICLE_CHARS    = 400  # cleaned body must have at least this many chars
+_MIN_ARTICLE_CHARS    = 50   # cleaned body must have at least this many chars
+                              # (drops only obvious snippet stubs; trust whitelist)
 
-# Social media / low-quality domains to skip
+# Social media / video / low-quality domains to skip outright.
+# YouTube and LinkedIn live here (was _BLOCKED_HOMEPAGE_DOMAINS) — Podcast
+# task only takes text articles, video/social isn't formal enough.
 _BLOCKED_DOMAINS = {
     "facebook.com", "fb.com", "twitter.com", "x.com",
     "instagram.com", "tiktok.com",
     "reddit.com", "pinterest.com", "tumblr.com",
     "weibo.com", "weixin.qq.com", "mp.weixin.qq.com",
     "threads.net", "snapchat.com",
-}
-# Domains where only the homepage is blocked; content paths are allowed.
-# YouTube and LinkedIn are primary podcast interview channels — /watch and
-# /posts/ should pass through even though the root domains are low-signal.
-_BLOCKED_HOMEPAGE_DOMAINS = {
     "youtube.com", "youtu.be", "linkedin.com",
 }
+
+# News-source whitelist. Articles from these domains are accepted as
+# "verified"; anything else is accepted but tagged [unverified_source]
+# in the .log so the user can spot-check during proofreading.
+_NEWS_WHITELIST = {
+    # ── 台灣主流 ─────────────────────────────────────────────────
+    "cna.com.tw", "ctee.com.tw", "udn.com", "ltn.com.tw",
+    "chinatimes.com", "ettoday.net", "bnext.com.tw",
+    "businessweekly.com.tw", "wealth.com.tw", "cw.com.tw",
+    "gvm.com.tw", "storm.mg", "moneydj.com", "mirrormedia.mg",
+    # ── 台灣產業專業 ─────────────────────────────────────────────
+    "digitimes.com.tw", "ithome.com.tw", "techorange.com",
+    "inside.com.tw", "36kr.com",
+    # ── 國際中文 ─────────────────────────────────────────────────
+    "bbc.com", "cn.nytimes.com", "cn.wsj.com",
+    "rfa.org", "voachinese.com", "dw.com",
+    "caixin.com", "yicai.com", "21jingji.com",
+    # ── 國際英文（自動翻譯）──────────────────────────────────────
+    "reuters.com", "bloomberg.com", "ft.com", "nytimes.com",
+    "wsj.com", "economist.com",
+    "nikkei.com", "asia.nikkei.com",
+    "techcrunch.com", "theverge.com", "techinasia.com",
+    "scmp.com", "mingpao.com", "hk01.com",
+}
+
+
+def _is_whitelisted_news(url: str) -> bool:
+    """True if URL's domain is in the curated news-source whitelist."""
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    return any(domain == d or domain.endswith("." + d) for d in _NEWS_WHITELIST)
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -104,16 +132,8 @@ def _parse_json(text: str):
 
 
 def _is_blocked(url: str) -> bool:
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower().replace("www.", "")
-    if any(domain == b or domain.endswith("." + b) for b in _BLOCKED_DOMAINS):
-        return True
-    if any(domain == b or domain.endswith("." + b) for b in _BLOCKED_HOMEPAGE_DOMAINS):
-        # Allow content paths (e.g. /watch, /posts/), block only the homepage
-        path = parsed.path or ""
-        if path in ("", "/"):
-            return True
-    return False
+    domain = urlparse(url).netloc.lower().replace("www.", "")
+    return any(domain == b or domain.endswith("." + b) for b in _BLOCKED_DOMAINS)
 
 
 def _scrape(url: str) -> dict:
@@ -140,6 +160,7 @@ def _scrape(url: str) -> dict:
             "title":       result.get("title", ""),
             "date":        result.get("date", ""),
             "publication": result.get("sitename", ""),
+            "author":      result.get("author", "") or "",
         }
     except Exception:
         return {}
@@ -290,6 +311,27 @@ def _intern_str(intern_name) -> str:
     return intern_name or config.DEFAULT_INTERN_NAME
 
 
+def _build_subtitle(article: dict, intern_str: str) -> str:
+    """
+    Build podcast article subtitle line: 'YYYY.MM.DD_intern_媒體_作者'.
+    Segments missing from the article are silently dropped; trailing
+    underscores are not produced.
+    """
+    parts: list[str] = []
+    pub_date = article.get("pub_date", "")
+    if pub_date:
+        # trafilatura returns YYYY-MM-DD or YYYY-MM. Convert to dot form.
+        parts.append(pub_date.replace("-", "."))
+    parts.append(intern_str)
+    pub = (article.get("publication") or "").strip()
+    if pub:
+        parts.append(pub)
+    author = (article.get("author") or "").strip()
+    if author:
+        parts.append(author)
+    return "_".join(parts)
+
+
 # ── Node 0: parse_instruction ────────────────────────────────────────────────
 
 def parse_instruction(state: PodcastState) -> dict:
@@ -429,12 +471,18 @@ def search_and_fetch(state: PodcastState) -> dict:
                 title, body = _translate_to_traditional(title, body)
                 scrape_src += "+translated"
 
-            print(f"    [{scrape_src}] {title[:55]}")
+            verified = _is_whitelisted_news(url)
+            verify_tag = "verified" if verified else "unverified"
+            print(f"    [{scrape_src}/{verify_tag}] {title[:55]}")
             items.append({
                 "title":        title,
                 "url":          url,
                 "source_label": _format_source_label(meta, url),
+                "pub_date":     meta.get("date", ""),
+                "publication":  meta.get("publication", "") or urlparse(url).netloc.replace("www.", ""),
+                "author":       (meta.get("author") or "").strip(),
                 "body":         body,
+                "verified":     verified,
             })
 
         articles_by_question.append({
@@ -462,15 +510,10 @@ def format_output(state: PodcastState) -> dict:
         builder.add_heading(f"{qi}. {section['question']}")
 
         for article in section["items"]:
-            # Red bold article title + (InternName); source metadata goes in comment
-            comment = "\n".join(filter(None, [
-                article.get("source_label", ""),
-                article.get("url", ""),
-            ]))
-            builder.add_red_heading_with_comment(
-                f"{article['title']} ({intern_str})",
-                comment,
-            )
+            # Title: red + bold + underlined; subtitle below via shift+enter.
+            # Subtitle format: YYYY.MM.DD_intern_媒體_作者 (segments dropped if missing)
+            subtitle = _build_subtitle(article, intern_str)
+            builder.add_red_underline_title_with_subtitle(article["title"], subtitle)
             # Body paragraphs
             for para in article["body"].split("\n"):
                 para = para.strip()
@@ -487,7 +530,18 @@ def format_output(state: PodcastState) -> dict:
     for section in state["articles"]:
         logger.add_search_result(
             section["question"],
-            [{"title": a["title"], "url": a["url"], "score": 0.0} for a in section["items"]],
+            [
+                {
+                    # Prefix unverified-source titles so they pop in the .log
+                    "title": (
+                        a["title"] if a.get("verified", True)
+                        else f"[unverified_source] {a['title']}"
+                    ),
+                    "url": a["url"],
+                    "score": 0.0,
+                }
+                for a in section["items"]
+            ],
         )
     log_path = logger.save(out_path)
 

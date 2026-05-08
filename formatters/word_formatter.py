@@ -342,6 +342,31 @@ class WordBuilder:
         _apply_para_spacing(p)
         return self
 
+    def add_red_underline_title_with_subtitle(
+        self, title: str, subtitle: str = "",
+    ) -> "WordBuilder":
+        """
+        Podcast article title block — one paragraph with two runs separated by
+        a soft line break (shift+enter):
+          line 1: title  — Bold + red + underlined
+          line 2: subtitle — Normal black (e.g. "2025.10.17_Justin_中央社_林宏翰")
+        """
+        p = self._doc.add_paragraph()
+        title_run = p.add_run(title)
+        _apply_font(title_run, size_pt=config.FONT_SIZE_PT, bold=True)
+        title_run.font.color.rgb = RGBColor(0xEE, 0x00, 0x00)
+        title_run.font.underline = True
+
+        if subtitle:
+            # Soft line break (w:br) — equivalent to shift+enter, stays in same paragraph
+            br = OxmlElement("w:br")
+            title_run._r.append(br)
+            sub_run = p.add_run(subtitle)
+            _apply_font(sub_run, size_pt=config.FONT_SIZE_PT, bold=False)
+
+        _apply_para_spacing(p)
+        return self
+
     # ── Word comments ─────────────────────────────────────────────────────────
 
     def _get_or_create_comments_part(self):
