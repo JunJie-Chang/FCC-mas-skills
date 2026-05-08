@@ -105,7 +105,9 @@ def next_action(
 
     hint_block = f"\n搜尋補充說明：{search_hint}" if search_hint else ""
 
-    prompt = f"""你是一個研究助理，正在規劃下一步搜尋。
+    prompt = f"""{config.time_context()}
+
+你是一個研究助理，正在規劃下一步搜尋。
 
 研究任務：{state['task_instruction']}
 
@@ -187,7 +189,9 @@ def evaluate(state: dict) -> dict:
         ensure_ascii=False,
     )
 
-    prompt = f"""你是研究進度評估助理。根據目前蒐集到的資料，判斷每個待確認問題是否已有足夠資訊。
+    prompt = f"""{config.time_context()}
+
+你是研究進度評估助理。根據目前蒐集到的資料，判斷每個待確認問題是否已有足夠資訊。
 
 待確認問題：
 {todos_json_str}

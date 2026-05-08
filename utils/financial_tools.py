@@ -12,7 +12,17 @@ Rate limiting: _CALL_DELAY seconds are inserted between successive API calls.
 """
 import time
 import warnings
+from datetime import datetime, timezone
 from typing import Any
+
+
+def _now_taipei_str() -> str:
+    """Return current time in Taipei tz as 'YYYY-MM-DD HH:MM TPE'."""
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo("Asia/Taipei")).strftime("%Y-%m-%d %H:%M TPE")
+    except Exception:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 # ── Q2 tool catalogue — yfinance（specific listed company） ───────────────────
 
@@ -187,8 +197,11 @@ def fetch_stock_price(symbol: str) -> dict:
         latest_close = float(hist.iloc[-1]["Close"])
         change_pct = round((latest_close - start_close) / start_close * 100, 2) if start_close else None
         info = _safe(lambda: t.info) or {}
+        # Last bar date (e.g. 2026-05-07) — accurate market data date, not just fetch time
+        last_bar_date = hist.index[-1].strftime("%Y-%m-%d")
         return {
             "symbol": symbol,
+            "as_of": last_bar_date,
             "current_price": round(latest_close, 4),
             "change_3mo_pct": change_pct,
             "high_3mo": round(float(hist["High"].max()), 4),
@@ -207,6 +220,7 @@ def fetch_financials(symbol: str) -> dict:
     def _fetch():
         t = _ticker(symbol)
         out = {"symbol": symbol}
+        period_ends = {}
         for attr, label in [
             ("quarterly_income_stmt",   "income_stmt_latest_q"),
             ("quarterly_balance_sheet", "balance_sheet_latest_q"),
@@ -217,8 +231,15 @@ def fetch_financials(symbol: str) -> dict:
                 col = df.iloc[:, 0].dropna()
                 # Keep only numeric rows; convert to plain float for JSON safety
                 out[label] = {str(k): float(v) for k, v in col.items() if isinstance(v, (int, float))}
+                # Period end date (e.g. 2026-03-31) lives in the column header
+                try:
+                    period_ends[label] = df.columns[0].strftime("%Y-%m-%d")
+                except Exception:
+                    period_ends[label] = str(df.columns[0])
         if len(out) == 1:   # only "symbol" key → nothing fetched
             return {"error": "no financial statements returned"}
+        out["period_end"] = period_ends   # {"income_stmt_latest_q": "2026-03-31", ...}
+        out["as_of"] = _now_taipei_str()
         return out
     result = _safe(_fetch)
     if "error" in result:
@@ -235,9 +256,9 @@ def fetch_key_metrics(symbol: str) -> dict:
     ]
     def _fetch():
         info = _ticker(symbol).info
-        out = {"symbol": symbol}
+        out = {"symbol": symbol, "as_of": _now_taipei_str()}
         out.update({k: info[k] for k in _WANTED if k in info and info[k] is not None})
-        if len(out) == 1:
+        if len(out) == 2:   # only "symbol" + "as_of" → nothing fetched
             return {"error": "no key metrics returned"}
         return out
     result = _safe(_fetch)
@@ -258,7 +279,20 @@ def fetch_holders(symbol: str) -> dict:
         for row in records:
             clean.append({k: (str(v) if not isinstance(v, (int, float, str, type(None))) else v)
                           for k, v in row.items()})
-        return {"symbol": symbol, "institutional_holders": clean}
+        # yfinance includes a "Date Reported" column on each record; surface the latest as as_of
+        try:
+            latest_reported = max(
+                (r.get("Date Reported") for r in clean if r.get("Date Reported")),
+                default=None,
+            )
+        except Exception:
+            latest_reported = None
+        return {
+            "symbol": symbol,
+            "as_of": _now_taipei_str(),
+            "latest_reported": latest_reported,
+            "institutional_holders": clean,
+        }
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ holders({symbol}): {result['error']}")
@@ -278,7 +312,10 @@ def fetch_news(symbol: str) -> dict:
             url = (content.get("canonicalUrl") or {}).get("url", "") or content.get("link", "")
             if title:
                 articles.append({"title": title, "url": url})
-        return {"symbol": symbol, "news": articles} if articles else {"error": "no parseable news"}
+        return (
+            {"symbol": symbol, "as_of": _now_taipei_str(), "news": articles}
+            if articles else {"error": "no parseable news"}
+        )
     result = _safe(_fetch)
     if "error" in result:
         print(f"[financial_tools] ⚠ news({symbol}): {result['error']}")

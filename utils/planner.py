@@ -111,7 +111,9 @@ def parse_tasks(
         if force_type else ""
     )
 
-    prompt = f"""你是任務規劃助理。把以下原始指令拆成一條一條的任務，並為每條任務分配正確的 agent_type。{force_note}
+    prompt = f"""{config.time_context()}
+
+你是任務規劃助理。把以下原始指令拆成一條一條的任務，並為每條任務分配正確的 agent_type。{force_note}
 
 可用的 agent_type：
 {agent_type_list}
@@ -152,14 +154,22 @@ def parse_tasks(
 
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=4096,
+        max_tokens=16384,
         messages=[{"role": "user", "content": prompt}],
     )
 
     raw = message.content[0].text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
-    data = json.loads(raw.strip())
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError as e:
+        if message.stop_reason == "max_tokens":
+            raise RuntimeError(
+                f"Planner Haiku 輸出被 max_tokens 截斷（{message.usage.output_tokens} tokens），"
+                f"請降低任務數量或進一步提高 max_tokens。原始錯誤：{e}"
+            ) from e
+        raise
 
     return [
         PlanTask(

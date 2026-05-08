@@ -488,8 +488,9 @@ class WordBuilder:
         headers: list[str],
         rows: list[list[str]],
     ) -> "WordBuilder":
-        """Insert a table with a bold header row."""
+        """Insert a table with a bold header row and single-line black borders on all cells."""
         table = self._doc.add_table(rows=1 + len(rows), cols=len(headers))
+        table.style = "Table Grid"   # built-in style: single-line borders on all sides + insideH/V
         # Header row
         for i, h in enumerate(headers):
             run = table.rows[0].cells[i].paragraphs[0].add_run(h)

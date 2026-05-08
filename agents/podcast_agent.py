@@ -340,7 +340,9 @@ def generate_queries(state: PodcastState) -> dict:
     client = _get_client()
 
     questions_json = json.dumps(state["questions"], ensure_ascii=False)
-    prompt = f"""你是一個搜尋查詢生成助理。針對 Podcast 主題「{state['topic']}」，
+    prompt = f"""{config.time_context()}
+
+你是一個搜尋查詢生成助理。針對 Podcast 主題「{state['topic']}」，
 為以下每個問題生成最佳的搜尋查詢字串（適合 Tavily / Google）。
 
 規則：
@@ -359,7 +361,7 @@ def generate_queries(state: PodcastState) -> dict:
 """
     msg = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=1024,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
     from utils.cost_tracker import tracker

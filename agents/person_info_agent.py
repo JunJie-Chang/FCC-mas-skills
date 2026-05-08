@@ -81,7 +81,9 @@ def parse_task(state: PersonInfoState) -> dict:
     """Build a research plan (todo list) and initial search queries for person research."""
     client = _get_client()
 
-    prompt = f"""你是一個人物背景研究規劃師。根據以下任務指令，產出研究計劃。
+    prompt = f"""{config.time_context()}
+
+你是一個人物背景研究規劃師。根據以下任務指令，產出研究計劃。
 
 任務指令：{state['task_instruction']}
 
@@ -176,14 +178,16 @@ def generate_report(state: PersonInfoState) -> dict:
     mode = state.get("mode", "short")
     if mode == "short":
         mode_rules = """\
-6. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景
-7. 報告精簡：最多 3 個 section，bullets 每個最多 6 條，paragraph 最多 150 字
-8. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
+9. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景
+10. 報告精簡：最多 3 個 section，bullets 每個最多 6 條，paragraph 最多 150 字
+11. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
     else:
         mode_rules = """\
-6. 【Medium 模式】可補充相關背景與延伸分析，section 數量不限，確保資訊完整"""
+9. 【Medium 模式】可補充相關背景與延伸分析，section 數量不限，確保資訊完整"""
 
-    prompt = f"""你是 FCC Partners 的商業研究助理。根據搜尋資料，針對以下任務產出一份繁體中文人物背景報告。
+    prompt = f"""{config.time_context()}
+
+你是 FCC Partners 的商業研究助理。根據搜尋資料，針對以下任務產出一份繁體中文人物背景報告。
 
 任務指令：{state['task_instruction']}
 
@@ -201,6 +205,10 @@ def generate_report(state: PersonInfoState) -> dict:
 5. 語言：繁體中文，保留英文專有名詞與公司名；不要在任何名詞後加括號標注其他語言的原文或譯名（不論英文、越南文或其他語言），直接寫名稱本身
 6. 不要在報告內容中提及任務指令的措辭、比喻或身份設定
 7. **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方公告為準」「資料可能有誤」「本報告基於公開資料」「無法保證準確性」或任何類似的 hedge / disclaimer 語句，直接陳述事實即可
+8. **禁用空洞修辭** — 涉及職務、資本額、持股、營收等具體事實時，必須給數字或來源；evidence 沒有就明寫「資料不足」，不得用形容詞替代：
+   - 禁用：「資深」「重要」「關鍵」「核心」「具影響力」 → 必須說明具體職務、年資、或具體事蹟
+   - 禁用：「廣泛人脈」「深厚經驗」「業界領袖」 → 必須附具體公司、年數或職稱
+   - 禁用：「持續發展」「不斷擴張」 → 必須給時間軸或具體里程碑
 {mode_rules}
 
 JSON 格式：

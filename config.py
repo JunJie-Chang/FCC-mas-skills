@@ -33,3 +33,19 @@ DOWNLOADS_DIR = os.path.expanduser("~/Downloads")
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_INTERN_NAME = "Justin"
+
+
+# ── Time anchor for LLM prompts ──────────────────────────────────────────────
+def time_context() -> str:
+    """
+    Inject current-year anchor into LLM prompts so the model doesn't fall back
+    to its training-cutoff default (often 2024). Use at the top of every prompt
+    that touches dates, "最新", "最近一季", relative time, or financial periods.
+    """
+    from datetime import date
+    y = date.today().year
+    return (
+        f"【時間基準】現在是 {y} 年。t = {y}（本年度）；"
+        f"t-1 = {y-1}；t-2 = {y-2}。"
+        f"凡是「最新」「最近一季」「去年」「年初至今」等相對時間，以此為準。"
+    )
