@@ -291,13 +291,14 @@ def generate_report(state: CompanyInfoState) -> dict:
     """
     client = _get_client()
 
-    # Flatten search results into readable context
+    # Flatten search results into readable context.
+    # Prefer Tavily-extracted full text when available; fall back to snippet.
     context_parts = []
     for entry in state["search_results"]:
         context_parts.append(f"[搜尋：{entry['query']}]")
         for r in entry["results"]:
             context_parts.append(f"來源：{r['title']} ({r['url']})")
-            context_parts.append(r["content"])
+            context_parts.append(r.get("full_content") or r["content"])
             context_parts.append("")
 
     import json as _json

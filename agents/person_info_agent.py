@@ -171,7 +171,7 @@ def generate_report(state: PersonInfoState) -> dict:
         context_parts.append(f"[搜尋：{entry['query']}]")
         for r in entry["results"]:
             context_parts.append(f"來源：{r['title']} ({r['url']})")
-            context_parts.append(r["content"])
+            context_parts.append(r.get("full_content") or r["content"])
             context_parts.append("")
     context = "\n".join(context_parts)
 

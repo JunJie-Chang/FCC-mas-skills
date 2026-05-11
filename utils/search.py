@@ -80,3 +80,35 @@ def fetch_full_content(url: str) -> Optional[str]:
         return None
     except Exception:
         return None
+
+
+def fetch_full_content_parallel(
+    urls: list[str],
+    max_workers: int = 5,
+) -> dict[str, str]:
+    """
+    Fetch full text for multiple URLs concurrently via Tavily extract.
+
+    Returns a dict mapping URL → extracted text. URLs that fail extraction
+    are omitted from the returned dict (caller falls back to snippet).
+    Each successful extract records 1 Tavily credit via cost_tracker.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from utils.cost_tracker import tracker
+
+    if not urls:
+        return {}
+
+    out: dict[str, str] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(fetch_full_content, url): url for url in urls}
+        for fut in as_completed(futures):
+            url = futures[fut]
+            try:
+                text = fut.result()
+            except Exception:
+                text = None
+            if text:
+                out[url] = text
+                tracker.record_tavily(1)
+    return out

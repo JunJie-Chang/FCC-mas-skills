@@ -29,8 +29,10 @@ load_dotenv(override=True)
 
 import config
 
-RESULTS_PER_QUERY = 3
-STALL_ROUNDS      = 2
+RESULTS_PER_QUERY    = 3
+STALL_ROUNDS         = 2
+FULLTEXT_PER_QUERY   = 2     # top-K results per query to enrich with Tavily extract
+FULLTEXT_CHAR_CAP    = 8000  # per-URL cap when storing full text (protects context size)
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -54,10 +56,36 @@ def _parse_json(text: str):
 
 # ── Public nodes ──────────────────────────────────────────────────────────────
 
+def _enrich_with_fulltext(results: list[dict]) -> list[dict]:
+    """
+    For the top-K results of a query, fetch full text via Tavily extract
+    and attach it as `full_content`. Failures are silent (snippet remains).
+    Results retain their original snippet content; consumers should prefer
+    `full_content` when non-empty and fall back to `content`.
+    """
+    from utils.search import fetch_full_content_parallel
+
+    if not results:
+        return results
+
+    targets = results[:FULLTEXT_PER_QUERY]
+    urls    = [r["url"] for r in targets if r.get("url")]
+    fetched = fetch_full_content_parallel(urls)
+
+    for r in results:
+        text = fetched.get(r.get("url", ""))
+        if text:
+            r["full_content"] = text[:FULLTEXT_CHAR_CAP]
+    return results
+
+
 def run_initial_search(state: dict) -> dict:
     """
     Execute the initial batch of search queries produced by parse_task.
     Seeds both search_results and evidence with the results.
+
+    Top-K results per query are enriched with Tavily-extracted full text
+    (see FULLTEXT_PER_QUERY).
     """
     from utils.search import search
     from utils.cost_tracker import tracker
@@ -68,6 +96,7 @@ def run_initial_search(state: dict) -> dict:
             continue
         results = search(query, max_results=RESULTS_PER_QUERY)
         tracker.record_tavily(1)
+        results = _enrich_with_fulltext(results)
         all_results.append({"query": query, "results": results})
 
     accumulated = list(state.get("evidence", [])) + all_results
@@ -156,6 +185,7 @@ def execute_search(state: dict) -> dict:
     query = queries[0]
     results = search(query, max_results=RESULTS_PER_QUERY)
     tracker.record_tavily(1)
+    results = _enrich_with_fulltext(results)
 
     new_entry  = {"query": query, "results": results}
     accumulated = list(state["evidence"]) + [new_entry]
@@ -179,8 +209,9 @@ def evaluate(state: dict) -> dict:
     for e in state["evidence"]:
         context_parts.append(f"[搜尋：{e['query']}]")
         for r in e["results"]:
-            context_parts.append(f"{r['title']}: {r['content'][:300]}")
-    context = "\n".join(context_parts)[:6000]
+            body = r.get("full_content") or r["content"]
+            context_parts.append(f"{r['title']}: {body[:500]}")
+    context = "\n".join(context_parts)[:10000]
 
     todos_json_str = json.dumps(
         [{"id": t["id"], "question": t["question"],
