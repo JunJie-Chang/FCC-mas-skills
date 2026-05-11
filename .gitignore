@@ -19,3 +19,6 @@ output/
 
 #Issue
 Issues.md
+
+# Local batch run scripts
+run_tasks.sh
