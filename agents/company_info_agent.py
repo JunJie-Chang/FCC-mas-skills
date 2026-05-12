@@ -52,6 +52,8 @@ class CompanyInfoState(TypedDict):
     financial_check: dict                  # {"q1":"Y"|"N","company_name":str,"q2":[tool_ids],"q3":{"needed":"Y"|"N","sector":str,"country":str}}
     financial_data: dict                   # {"ticker": str, tool_id: data_dict, ...}
     sector_data: dict                      # FinanceDatabase sector scan result
+    number_items: list[dict]               # raw Haiku echo from utils/number_extract (audit)
+    numbers_zh: dict                       # {label: canonical Chinese string} for prompt
     report: dict                           # {title, sections:[{heading,type,items|content}]}
     output_path: str
     log_path: str
@@ -282,6 +284,24 @@ def fetch_sector_data(state: CompanyInfoState) -> dict:
     return {"sector_data": data}
 
 
+# ── Node 2b: extract_numbers ──────────────────────────────────────────────────
+
+def extract_numbers_node(state: CompanyInfoState) -> dict:
+    """
+    After the ReAct loop finishes, run Haiku to echo all task-relevant numbers
+    from the evidence pool, then convert deterministically to Chinese strings
+    via utils/unit_convert. The synthesizer is then told to echo those strings
+    verbatim — removing LLM from the unit-conversion step.
+    """
+    from utils.number_extract import extract_numbers
+
+    items, numbers_zh = extract_numbers(
+        task_instruction=state["task_instruction"],
+        evidence=state.get("evidence", []),
+    )
+    return {"number_items": items, "numbers_zh": numbers_zh}
+
+
 # ── Node 3: generate_report ───────────────────────────────────────────────────
 
 def generate_report(state: CompanyInfoState) -> dict:
@@ -314,18 +334,24 @@ def generate_report(state: CompanyInfoState) -> dict:
         context_parts.append(_json.dumps(sec, ensure_ascii=False, default=str))
         context_parts.append("")
 
+    from utils.number_extract import format_for_prompt
+    numbers_block = format_for_prompt(state.get("numbers_zh") or {})
+    if numbers_block:
+        context_parts.append(numbers_block)
+        context_parts.append("")
+
     context = "\n".join(context_parts)
 
     mode = state.get("mode", "short")
     if mode == "short":
         mode_rules = """\
-9. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景資訊
-10. 報告結構精簡：1-3 個 section，每個 bullets section 最多 6 條，paragraph 最多 150 字
-11. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
+10. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景資訊
+11. 報告結構精簡：1-3 個 section，每個 bullets section 最多 6 條，paragraph 最多 150 字
+12. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
     else:
         mode_rules = """\
-9. 【Medium 模式】可適度補充相關背景與延伸分析，section 數量不限
-10. 確保資訊完整、分析深度足夠"""
+10. 【Medium 模式】可適度補充相關背景與延伸分析，section 數量不限
+11. 確保資訊完整、分析深度足夠"""
 
     prompt = f"""{config.time_context()}
 
@@ -352,6 +378,10 @@ def generate_report(state: CompanyInfoState) -> dict:
    - 禁用：「重要環節」「戰略佈局」「核心競爭力」「關鍵角色」 → 必須說「做什麼產品 / 服務什麼客戶 / 在哪一段價值鏈」
    - 禁用：「行業領先」「市場領導者」「龍頭」 → 必須附市占率、營收排名或來源
    - 禁用：「持續優化」「不斷精進」「全方位」「一站式」 → 直接刪掉這類無資訊量副詞
+9. **【結構化數字 echo 規則】**：若 context 內有「[結構化數字]」區塊，**該區塊的中文字串已是最終格式**，報告中提及對應金額 / 百分比 / 倍數時必須**逐字 echo**，禁止：
+   - 改寫數值（例如把「94 億美元」寫成「約 90 億美元」「9.4 億美元」「9,400 萬美元」）
+   - 重新做單位換算（不要把 "$9.4 billion" 自己翻譯，直接用區塊裡的 "94 億美元"）
+   - 用「約」「大約」「近」「逾」「超過」等模糊化前綴包裹（除非 evidence 本身就有這些字）
 {mode_rules}
 
 JSON 格式：
@@ -432,6 +462,8 @@ def format_output(state: CompanyInfoState) -> dict:
         logger.add_financial_data(state["financial_data"])
     if state.get("sector_data"):
         logger.add_sector_data(state["sector_data"])
+    if state.get("number_items"):
+        logger.add_extracted_numbers(state["number_items"])
     log_path = logger.save(output_path)
 
     return {
@@ -454,6 +486,7 @@ def build_graph():
     graph.add_node("evaluate",             evaluate)         # ReAct: assess progress
     graph.add_node("next_action",          next_action)      # ReAct: plan next query
     graph.add_node("execute_search",       execute_search)   # ReAct: run one query
+    graph.add_node("extract_numbers",      extract_numbers_node)  # Haiku echo → Python convert
     graph.add_node("generate_report",      generate_report)
     graph.add_node("format_output",        format_output)
 
@@ -477,10 +510,11 @@ def build_graph():
     graph.add_conditional_edges(
         "evaluate",
         _should_continue,
-        {"loop": "next_action", "done": "generate_report"},
+        {"loop": "next_action", "done": "extract_numbers"},
     )
-    graph.add_edge("next_action",    "execute_search")
-    graph.add_edge("execute_search", "evaluate")
+    graph.add_edge("next_action",     "execute_search")
+    graph.add_edge("execute_search",  "evaluate")
+    graph.add_edge("extract_numbers", "generate_report")
 
     # Final synthesis
     graph.add_edge("generate_report", "format_output")
@@ -527,6 +561,8 @@ def run(
         "financial_check": {},
         "financial_data": {},
         "sector_data": {},
+        "number_items": [],
+        "numbers_zh": {},
         "report": {},
         "output_path": "",
         "log_path": "",

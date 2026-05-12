@@ -46,6 +46,8 @@ class PersonInfoState(TypedDict):
     round: int
     search_queries: list[str]
     search_results: list[dict]
+    number_items: list[dict]
+    numbers_zh: dict
     report: dict
     output_path: str
     log_path: str
@@ -160,6 +162,19 @@ def _should_continue(state: PersonInfoState) -> str:
     return react_loop.should_continue(state, max_rounds=_MAX_ROUNDS)
 
 
+# ── Node 2b: extract_numbers ──────────────────────────────────────────────────
+
+def extract_numbers_node(state: PersonInfoState) -> dict:
+    """Haiku echo task-relevant numbers → Python deterministic Chinese conversion."""
+    from utils.number_extract import extract_numbers
+
+    items, numbers_zh = extract_numbers(
+        task_instruction=state["task_instruction"],
+        evidence=state.get("evidence", []),
+    )
+    return {"number_items": items, "numbers_zh": numbers_zh}
+
+
 # ── Node 3: generate_report ───────────────────────────────────────────────────
 
 def generate_report(state: PersonInfoState) -> dict:
@@ -173,17 +188,24 @@ def generate_report(state: PersonInfoState) -> dict:
             context_parts.append(f"來源：{r['title']} ({r['url']})")
             context_parts.append(r.get("full_content") or r["content"])
             context_parts.append("")
+
+    from utils.number_extract import format_for_prompt
+    numbers_block = format_for_prompt(state.get("numbers_zh") or {})
+    if numbers_block:
+        context_parts.append(numbers_block)
+        context_parts.append("")
+
     context = "\n".join(context_parts)
 
     mode = state.get("mode", "short")
     if mode == "short":
         mode_rules = """\
-9. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景
-10. 報告精簡：最多 3 個 section，bullets 每個最多 6 條，paragraph 最多 150 字
-11. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
+10. 【Short 模式】嚴格依照任務指令範圍，不延伸、不補充任務未要求的背景
+11. 報告精簡：最多 3 個 section，bullets 每個最多 6 條，paragraph 最多 150 字
+12. 目標篇幅約兩頁，寧可少寫也不要湊字數"""
     else:
         mode_rules = """\
-9. 【Medium 模式】可補充相關背景與延伸分析，section 數量不限，確保資訊完整"""
+10. 【Medium 模式】可補充相關背景與延伸分析，section 數量不限，確保資訊完整"""
 
     prompt = f"""{config.time_context()}
 
@@ -209,6 +231,7 @@ def generate_report(state: PersonInfoState) -> dict:
    - 禁用：「資深」「重要」「關鍵」「核心」「具影響力」 → 必須說明具體職務、年資、或具體事蹟
    - 禁用：「廣泛人脈」「深厚經驗」「業界領袖」 → 必須附具體公司、年數或職稱
    - 禁用：「持續發展」「不斷擴張」 → 必須給時間軸或具體里程碑
+9. **【結構化數字 echo 規則】**：若 context 內有「[結構化數字]」區塊，**該區塊的中文字串已是最終格式**，報告中提及對應金額 / 百分比 / 倍數時必須**逐字 echo**，禁止改寫數值、禁止重新做單位換算、禁止用「約」「大約」等模糊化前綴包裹（除非 evidence 本身就有這些字）
 {mode_rules}
 
 JSON 格式：
@@ -276,6 +299,8 @@ def format_output(state: PersonInfoState) -> dict:
     logger.set_queries(state["search_queries"])
     for entry in state["search_results"]:
         logger.add_search_result(entry["query"], entry["results"])
+    if state.get("number_items"):
+        logger.add_extracted_numbers(state["number_items"])
     log_path = logger.save(output_path)
 
     return {"output_path": str(output_path), "log_path": str(log_path)}
@@ -290,6 +315,7 @@ def build_graph():
     graph.add_node("evaluate",       evaluate)
     graph.add_node("next_action",    next_action)
     graph.add_node("execute_search", execute_search)
+    graph.add_node("extract_numbers", extract_numbers_node)
     graph.add_node("generate_report", generate_report)
     graph.add_node("format_output",  format_output)
 
@@ -299,10 +325,11 @@ def build_graph():
     graph.add_conditional_edges(
         "evaluate",
         _should_continue,
-        {"loop": "next_action", "done": "generate_report"},
+        {"loop": "next_action", "done": "extract_numbers"},
     )
-    graph.add_edge("next_action",    "execute_search")
-    graph.add_edge("execute_search", "evaluate")
+    graph.add_edge("next_action",     "execute_search")
+    graph.add_edge("execute_search",  "evaluate")
+    graph.add_edge("extract_numbers", "generate_report")
     graph.add_edge("generate_report", "format_output")
     graph.add_edge("format_output",  END)
 
@@ -331,6 +358,8 @@ def run(
         "round":          0,
         "search_queries": [],
         "search_results": [],
+        "number_items": [],
+        "numbers_zh": {},
         "report": {},
         "output_path": "",
         "log_path": "",

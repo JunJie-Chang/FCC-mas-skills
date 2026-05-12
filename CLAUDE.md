@@ -100,7 +100,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 ### Agent 內部結構
 
-**company_info**（10-node LangGraph，ReAct loop）：
+**company_info**（11-node LangGraph，ReAct loop + numbers layer）：
 1. `parse_task` — Haiku 產出 research plan（todos 3-6 個問題）+ 初始 queries（推論式設計，搜一手來源）
 2. `check_financial_need` — Haiku Q1/Q2/Q3 分類（見下方 Financial Data Layer）
 3. `fetch_financial_data` — ticker 解析 + yfinance 抓取；**conditional edge**：Q2=[] 跳過
@@ -109,12 +109,13 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 6. `evaluate` — Haiku 評估每個 todo：done / pending / unresolved；連續 2 輪無新資料自動 done
 7. `next_action` — Haiku 依 todo 狀態決定下一條搜尋 query（或觸發 done）
 8. `execute_search` — 執行單條 query，結果追加 evidence pool；**loop back to evaluate**
-9. `generate_report` — Sonnet（short）/ Opus（medium）合成 JSON 報告；evidence 全部注入 context
-10. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+9. `extract_numbers` — Haiku verbatim echo evidence 內所有相關數字 → Python 確定性轉中文字串（見下方 Numbers Layer）
+10. `generate_report` — Sonnet（short）/ Opus（medium）合成 JSON 報告；evidence + `numbers_zh` 注入 context
+11. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
 
 **company_info loop 控制**：`MAX_ROUNDS=6`（hard cap）；所有 todo 皆 done 或 unresolved 提前結束；連續 2 輪 0 結果（stall）強制結束
 
-**person_info**（8-node LangGraph，同 ReAct loop）：同 company_info，無財務資料層（無 check_financial_need / fetch_financial_data / fetch_sector_data）；`MAX_ROUNDS=5`
+**person_info**（9-node LangGraph，同 ReAct loop + numbers layer）：同 company_info，無財務資料層（無 check_financial_need / fetch_financial_data / fetch_sector_data）；`MAX_ROUNDS=5`
 
 **sector_scan**（4-node LangGraph，conditional edge）：
 1. `parse_request` — Haiku 拿 `get_fdb_enum()` 載入的 enum，做 feasibility 判斷 + 鎖定 `industry / country / top_n / rank_by / metrics`；defensive 二次驗證 Haiku 給的 industry 真的在 enum 內，否則自動翻 N
@@ -190,6 +191,33 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 - **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁；合成用 `LLM_SYNTHESIS`（Sonnet）
 - **Medium mode**：section 數量不限，可延伸分析；合成用 `LLM_MAIN`（Opus）
 - **Section types**：`bullets`（條列）/ `paragraph`（敘述）/ `table`（多欄比較，含 headers + rows）；Sonnet/Opus 自選最合適的
+- **結構化數字 echo 規則**（rule 9 in prompt）：context 內若有 `[結構化數字]` 區塊，該區塊中文字串為最終格式，必須**逐字 echo**；禁止改寫、禁止重算單位、禁止用「約 / 大約 / 近 / 逾 / 超過」前綴包裹（除非 evidence 本身就有這些字）— 這條規則是 Numbers Layer 的對接點
+
+### Numbers Layer（`utils/number_extract.py` + `utils/unit_convert.py`）
+
+**為什麼存在**：issue #8 case — GameStop/eBay 報告同段內把 "$9.4 billion" 寫成「9.4 億美元」（應為 94 億）。根因是 synthesizer LLM 在長 prose 生成中對「相同量綱重複轉換」會掉位。`extract_numbers → 結構化數字 echo` 把單位換算從 LLM 移出。
+
+**兩步式 pipeline**：
+1. `extract_numbers` node — Haiku **verbatim echo** evidence 內所有任務相關數字，產出 `[{label, raw, value, scale, currency}, ...]`；**禁止計算 / 翻譯 / 推單位**，找不到就漏掉，不准捏造
+2. `utils/unit_convert.to_chinese_amount(value, scale, currency)` — 純 Python 確定性轉換為 `"XX 億美元"` / `"X.X 兆新台幣"` / `"XX%"` 等中文字串
+
+**注入點**：`generate_report` context 的最後一段（在 evidence / financial_data / sector_data 之後），透過 `format_for_prompt(numbers_zh)` 渲染。Synthesizer rule 9 強制 echo。
+
+**Scale 字典**（`SCALE_MULTIPLIERS` in `utils/unit_convert.py`）：`plain / thousand / million / billion / trillion`，加上 `percent` / `ratio` 兩個 passthrough。
+
+**Currency 字典**（`CURRENCY_ZH`）：USD/TWD/NTD/HKD/CNY/RMB/JPY/EUR/GBP/KRW/SGD → 中文名。
+
+**確定性轉換規則**（`to_chinese_amount`）：value × scale_multiplier → base units → 自動依量級選 萬 / 億 / 兆 單位，附中文貨幣名。例：`(9.4, "billion", "USD")` → `"94 億美元"`。
+
+**失敗模式**：Haiku 回傳 JSON 解析失敗 → 印警告、回傳空 dict、graceful degrade（synthesizer 沒拿到 `numbers_zh` block，照舊跑）。
+
+**Audit 追蹤**：每筆 echo 連同 derived Chinese 都寫入 `.log` 的 `--- Extracted Numbers ---` 區塊，方便對照 raw → zh 是否正確。
+
+**成本**：每次 agent run 多一次 Haiku 呼叫（evidence cap 50k 字元），約 $0.01-0.02 等級。
+
+**Self-test**：`python3.13 utils/unit_convert.py` 跑 13 個 case（含 GameStop 9 vs 9.4 billion）；所有 case 過才能 ship。新增 scale / currency 時加 case。
+
+**目前接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若會引用 evidence 數字，照樣插入 `evaluate(done) → extract_numbers → generate_report` 並在 prompt 加 rule 9。
 
 ### 時間錨點 helper（`config.time_context()`）
 所有觸及「最新」「最近一季」「去年」「年初至今」等相對時間的 LLM prompt 都要在開頭注入 `config.time_context()`。注入點：

@@ -43,6 +43,7 @@ class AgentLogger:
         self._sources: list[dict] = []   # {"query": str, "results": [{"title","url","score"}]}
         self._financial_data: dict = {}  # {"ticker": str, tool_id: data_dict, ...}
         self._sector_data: dict = {}     # FinanceDatabase sector scan result
+        self._number_items: list[dict] = []  # raw Haiku echo from number_extract
         self._output_path: str = ""
         self._started = datetime.now()
 
@@ -78,6 +79,13 @@ class AgentLogger:
         financial_data format: {"ticker": str, tool_id: data_dict, ...}
         """
         self._financial_data = financial_data
+
+    def add_extracted_numbers(self, items: list[dict]) -> None:
+        """
+        Record raw Haiku echo from utils/number_extract (verbatim numbers + scale +
+        currency + derived Chinese string). Logged for audit / debugging only.
+        """
+        self._number_items = items
 
     def set_output_path(self, path: Union[str, Path]) -> None:
         self._output_path = str(path)
@@ -175,6 +183,15 @@ class AgentLogger:
                         dumped = json.dumps(data, ensure_ascii=False, default=str, indent=2)
                         for line in dumped.splitlines():
                             lines.append(f"  {line}")
+            lines.append("")
+
+        if self._number_items:
+            lines.append("--- Extracted Numbers (Haiku echo → Python convert) ---")
+            for it in self._number_items:
+                label = it.get("label", "")
+                raw = it.get("raw", "")
+                zh = it.get("zh", "")
+                lines.append(f"  {label}: raw={raw!r}  →  zh={zh!r}")
             lines.append("")
 
         lines.append("--- Output ---")
