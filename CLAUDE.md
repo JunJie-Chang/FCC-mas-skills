@@ -285,6 +285,12 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 **Q1 收緊條件（wave 2）**：明列 Y 觸發詞（股價 / 市值 / PE / EV/EBITDA / 股息 / 最新財報數字 / 機構持股 / Yahoo 新聞）、N 條件（純業務面研究即使帶 ticker 也 N）、保守原則（不確定 → N）。意圖：避免每個帶公司名的任務都觸發財務層。
 
+**Multi-ticker 結構（issue #13）**：`check_financial_need` 輸出 `tickers: list[str]`（最多 3 個，主角優先）+ `company_name: str`（fallback）兩個互斥欄位，取代舊的單一 `company_name`：
+- Haiku 能直接判定 ticker → 填 `tickers`（純字串，dedup + uppercase + cap 3），`company_name=""`
+- Haiku 不確定 → `tickers=[]`，`company_name` 填乾淨單一公司名走 `resolve_ticker`
+- `fetch_financial_data` 先驗證 direct tickers 通過 `_is_valid_ticker_format`；通過的直接 `fetch_all` 抓資料、bypass Haiku #2；都沒過才走 company_name fallback path
+- 適用情境：M&A 雙方都列、Apple/Tesla 等熟公司省一次 Haiku 呼叫、`GameStop (GME)` 這類括號干擾下游的 case 也直接收掉
+
 **Q2 工具**（`YFINANCE_TOOL_DESCRIPTIONS` / `TOOL_REGISTRY`）：
 - `stock_price` — 近 3 個月股價走勢、現價、52 週高低
 - `financials`  — 最新季度財報（損益 / 資產負債 / 現金流量）
@@ -299,7 +305,21 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 新增工具：yfinance 工具加入 `TOOL_REGISTRY` + `YFINANCE_TOOL_DESCRIPTIONS`；新資料庫工具加入各自的 `*_TOOL_REGISTRY` + `*_TOOL_DESCRIPTIONS`，並在 prompt 新增對應 Qn。
 
-Financial / sector data 以結構化 JSON 注入 `generate_report` context；財務數字優先採用 yfinance，Tavily 數字僅作背景參考。所有 fetched data 同時寫入 `.log` sidecar（`--- Financial Data ---` / `--- Sector Data ---` 區塊）。
+**`financial_data` state 結構（multi-ticker）**：
+```python
+{
+    "GME":  {"stock_price": {...}, "financials": {...}, ...},    # tool_id keys
+    "EBAY": {"stock_price": {...}, ...},
+    "_resolve_failed": ["..."],                                  # optional
+}
+# or, when no ticker resolves at all:
+{"_ticker_error": "...", "_resolve_failed": [...]}
+```
+Top-level keys 是 ticker（uppercase），meta keys 以 `_` 開頭。`generate_report` 對每個非 `_` 開頭的 key 注入一個 `[結構化財務資料 — TICKER（來自 yfinance）]` block；`logger` 每個 ticker render 一個 `--- Financial Data (TICKER | yfinance: ...) ---` 區塊。
+
+**synth prompt rule 6 為 multi-ticker 強化**：引用 yfinance 數字時必須指明是哪一家公司（例：「GME 市值 103.9 億美元」），避免混淆來源。
+
+Financial / sector data 以結構化 JSON 注入 `generate_report` context；財務數字優先採用 yfinance，Tavily 數字僅作背景參考。所有 fetched data 同時寫入 `.log` sidecar。
 
 **Ticker 解析（`resolve_ticker(strict=True)` 為新預設）**：
 

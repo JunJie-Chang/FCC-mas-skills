@@ -49,8 +49,8 @@ class CompanyInfoState(TypedDict):
     # Legacy / shared
     search_queries: list[str]
     search_results: list[dict]             # [{query, results:[{title,url,content,score}]}]
-    financial_check: dict                  # {"q1":"Y"|"N","company_name":str,"q2":[tool_ids],"q3":{"needed":"Y"|"N","sector":str,"country":str}}
-    financial_data: dict                   # {"ticker": str, tool_id: data_dict, ...}
+    financial_check: dict                  # {"q1":"Y"|"N","tickers":[...],"company_name":str,"q2":[tool_ids],"q3":{...}}
+    financial_data: dict                   # {ticker: {tool_id: data, ...}, ..., "_resolve_failed":[names]} — empty / {"_ticker_error":...} when none resolved
     sector_data: dict                      # FinanceDatabase sector scan result
     number_items: list[dict]               # raw Haiku echo from utils/number_extract (audit)
     numbers_zh: dict                       # {label: canonical Chinese string} for prompt
@@ -193,7 +193,7 @@ def check_financial_need(state: CompanyInfoState) -> dict:
     yf_menu = "\n".join(f'- "{tid}": {desc}' for tid, desc in YFINANCE_TOOL_DESCRIPTIONS.items())
     sector_menu = "\n".join(f'- "{tid}": {desc}' for tid, desc in SECTOR_TOOL_DESCRIPTIONS.items())
 
-    prompt = f"""你是一個任務分析助理。根據以下任務指令，回答三個問題。
+    prompt = f"""你是一個任務分析助理。根據以下任務指令，回答下列問題。
 
 任務指令：{state['task_instruction']}
 
@@ -208,37 +208,64 @@ def check_financial_need(state: CompanyInfoState) -> dict:
   - Y 條件：任務字面提到「股價」「市值」「PE」「EV/EBITDA」「股息」「最近一季 / 最新財報數字」「機構持股」「Yahoo 新聞」其中之一
   - N 條件：純業務面研究（戰略、產品線、競爭定位、人事、海外佈局、併購歷史、客戶關係）— 即使任務帶公司名與股票代碼，只要沒明問財務數字，一律 N
   - **保守原則**：不確定 → N（這層只是抓**結構化市場資料**，業務細節走 Tavily 即可）
-- Q2：若 Q1=Y，從 Q2 工具清單選出實際需要的 id（可複選）；否則空陣列
-- company_name：若 Q1=Y，填最適合搜尋 ticker 的名稱（優先英文，含市場後綴如 .TW / .HK）；否則空字串
+
+- Q2：若 Q1=Y，從 Q2 工具清單選出實際需要的 id（可複選，所有 ticker 共用同一份工具清單）；否則空陣列
+
+- tickers：若 Q1=Y 且【你能直接判定股票代碼】，填**list of 純 ticker 字串**（最多 3 個，按任務指令出現順序）；否則空 list []
+  - 任務明寫了 ticker（例「Tesla (TSLA)」「環旭電子 (3033.TW)」「GameStop NYSE: GME」），直接擷取
+  - 任務只給中／英文公司名但你 high-confidence 知道對應 ticker（例「Tesla」→ TSLA、「台積電」→ 2330.TW），也填
+  - 任務涉及多家公司（M&A / 比較 / 競合），逐個填進 list（M&A 把【收購方 / 任務主角】放第一位）
+  - 不確定就不要硬猜（寧可空 list 走 fallback，也不要填錯）
+  - 嚴格格式：純 ticker 字串（如 "GME"、"2330.TW"、"9988.HK"），禁止加括號 / 交易所前綴 / 公司名
+
+- company_name：若 tickers=[] 但 Q1=Y（任務需要財務資料但你不確定任何 ticker），填【乾淨】公司英文名（單一公司，例：Envicool / Universal Scientific Industrial），禁止加括號 / 交易所 / ticker；否則空字串
+
 - Q3：任務是否需要產業 / 地區的公司清單或掃描？若是，填 needed=Y，並**必須**指定 sector（英文產業名）與 country（英文國名）；country 不可填 null，若任務未明示地區，請從 task context 推斷（CY / FCC Partners 業務以台灣、東南亞、香港為主，無法推斷時預設 "Taiwan"）；否則 needed=N
+
 - Q2 與 Q3 互相獨立，可同時觸發
 - 回傳純 JSON，不要多餘說明
 
 格式範例：
-{{"q1": "Y", "company_name": "Tesla", "q2": ["stock_price", "key_metrics"], "q3": {{"needed": "N", "sector": "", "country": null}}}}
-{{"q1": "N", "company_name": "", "q2": [], "q3": {{"needed": "Y", "sector": "Electric Vehicles", "country": "United States"}}}}
+{{"q1": "Y", "tickers": ["TSLA"], "company_name": "", "q2": ["stock_price", "key_metrics"], "q3": {{"needed": "N", "sector": "", "country": null}}}}
+{{"q1": "Y", "tickers": ["GME", "EBAY"], "company_name": "", "q2": ["stock_price", "key_metrics", "financials"], "q3": {{"needed": "N", "sector": "", "country": null}}}}
+{{"q1": "Y", "tickers": [], "company_name": "Envicool", "q2": ["financials"], "q3": {{"needed": "N", "sector": "", "country": null}}}}
+{{"q1": "N", "tickers": [], "company_name": "", "q2": [], "q3": {{"needed": "Y", "sector": "Electric Vehicles", "country": "United States"}}}}
 """
 
     client = _get_client()
     message = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=300,
+        max_tokens=400,   # tickers list + JSON scaffolding needs a bit more headroom than 300
         messages=[{"role": "user", "content": prompt}],
     )
 
     from utils.cost_tracker import tracker
     tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
 
+    _empty = {"q1": "N", "tickers": [], "company_name": "", "q2": [],
+              "q3": {"needed": "N", "sector": "", "country": None}}
     try:
         check = _parse_json(message.content[0].text)
         if not isinstance(check.get("q2"), list):
             check["q2"] = []
-        if "company_name" not in check:
+        # tickers: list of clean uppercase strings, dedup preserving order, cap at 3
+        raw_tickers = check.get("tickers") if isinstance(check.get("tickers"), list) else []
+        seen = set()
+        tickers = []
+        for t in raw_tickers:
+            if not isinstance(t, str):
+                continue
+            t = t.strip().upper()
+            if t and t not in seen:
+                seen.add(t)
+                tickers.append(t)
+        check["tickers"] = tickers[:3]
+        if "company_name" not in check or not isinstance(check["company_name"], str):
             check["company_name"] = ""
         if not isinstance(check.get("q3"), dict):
             check["q3"] = {"needed": "N", "sector": "", "country": None}
     except Exception:
-        check = {"q1": "N", "company_name": "", "q2": [], "q3": {"needed": "N", "sector": "", "country": None}}
+        check = _empty
 
     return {"financial_check": check}
 
@@ -247,24 +274,69 @@ def check_financial_need(state: CompanyInfoState) -> dict:
 
 def fetch_financial_data(state: CompanyInfoState) -> dict:
     """
-    Resolve ticker and fetch financial data for requested tools.
+    Resolve tickers (multi) and fetch financial data for each, per requested tools.
     Skipped entirely (via conditional edge) when Q1=N or Q2=[].
-    Returns empty dict on ticker resolution failure so the graph continues.
+
+    Resolution order:
+      1. `tickers` list from check_financial_need — direct path, only format-validated
+         tickers used (Haiku occasionally still slips a name in here)
+      2. If no valid direct tickers AND `company_name` is set — single-name fallback
+         via resolve_ticker (existing Haiku #2 normalizer path)
+
+    Output shape:
+        {"GME": {tool_id: data, ...}, "EBAY": {...}, "_resolve_failed": [names]}
+    or, when nothing resolves:
+        {"_ticker_error": "...", "_resolve_failed": [...]}
     """
-    from utils.financial_tools import fetch_all, resolve_ticker
+    from utils.financial_tools import (
+        _is_valid_ticker_format, fetch_all, resolve_ticker,
+    )
 
-    tools = state["financial_check"].get("q2", [])
-    company_name = state["financial_check"].get("company_name") or state["task_instruction"][:40]
+    check = state["financial_check"]
+    tools = check.get("q2", [])
 
-    print(f"[financial_tools] 解析 ticker：{company_name}…")
-    symbol = resolve_ticker(company_name, task_context=state["task_instruction"])
+    # ── 1. Direct tickers from check_financial_need ───────────────────────────
+    direct = check.get("tickers", []) or []
+    resolved: list[str] = []
+    rejected_direct: list[str] = []
+    for t in direct:
+        if _is_valid_ticker_format(t):
+            resolved.append(t.upper())
+        else:
+            rejected_direct.append(t)
+    for r in rejected_direct:
+        print(f"[financial_tools] ⚠ rejecting direct ticker {r!r} (bad format)")
 
-    if not symbol:
+    # ── 2. Fallback: resolve company_name when no valid direct ticker ─────────
+    failed_names: list[str] = []
+    if not resolved:
+        name = (check.get("company_name") or "").strip()
+        if not name:
+            # Last-ditch: prefix of task instruction (matches legacy behavior)
+            name = state["task_instruction"][:40]
+        print(f"[financial_tools] 解析 ticker：{name}…")
+        sym = resolve_ticker(name, task_context=state["task_instruction"])
+        if sym:
+            resolved.append(sym)
+        else:
+            failed_names.append(name)
+
+    if not resolved:
         print("[financial_tools] ⚠ 找不到對應 ticker，跳過財務資料抓取")
-        return {"financial_data": {"_ticker_error": f"ticker resolution failed for {company_name!r}"}}
+        err = f"ticker resolution failed; direct={direct!r}, name={check.get('company_name')!r}"
+        return {"financial_data": {"_ticker_error": err, "_resolve_failed": failed_names}}
 
-    print(f"[financial_tools] ticker = {symbol}，抓取：{tools}")
-    data = fetch_all(symbol, tools)
+    # ── 3. Fetch all tools for each resolved ticker ──────────────────────────
+    print(f"[financial_tools] fetching {len(tools)} tools × {len(resolved)} tickers: {resolved}")
+    data: dict = {}
+    for symbol in resolved:
+        print(f"[financial_tools] ticker = {symbol}，抓取：{tools}")
+        payload = fetch_all(symbol, tools)
+        # fetch_all puts the symbol under "ticker" — redundant when top-level key already is the ticker
+        payload.pop("ticker", None)
+        data[symbol] = payload
+    if failed_names:
+        data["_resolve_failed"] = failed_names
     return {"financial_data": data}
 
 
@@ -323,9 +395,11 @@ def generate_report(state: CompanyInfoState) -> dict:
 
     import json as _json
     fin = state.get("financial_data") or {}
-    if fin and len(fin) > 1:   # more than just "ticker" key
-        context_parts.append("[結構化財務資料（來自 yfinance）]")
-        context_parts.append(_json.dumps(fin, ensure_ascii=False, default=str))
+    # Top-level keys are tickers (uppercase); meta keys are prefixed with "_".
+    ticker_keys = [k for k in fin.keys() if not k.startswith("_")]
+    for ticker in ticker_keys:
+        context_parts.append(f"[結構化財務資料 — {ticker}（來自 yfinance）]")
+        context_parts.append(_json.dumps(fin[ticker], ensure_ascii=False, default=str))
         context_parts.append("")
 
     sec = state.get("sector_data") or {}
@@ -371,7 +445,7 @@ def generate_report(state: CompanyInfoState) -> dict:
    - type "table"：適合多筆同結構數值、比較性資料（用 headers 陣列 + rows 二維陣列）；例如：財務指標比較、多公司對照、歷年數據
 4. 語言：繁體中文，保留英文專有名詞（公司名、人名、產品名）；不要在任何名詞後加括號標注其他語言的原文或譯名（例如不要寫「環球集團（Global Group）」或「芽莊（Nha Trang）」，直接寫名稱本身）
 5. 精簡準確，不要堆砌廢話；不要在報告內容中提及任務指令的措辭、比喻或身份設定（例如不要出現「類似麥肯錫」、「根據您的要求」等）
-6. 財務數字優先採用結構化財務資料（yfinance）；Tavily 的財務數字僅作為背景參考，若與結構化資料矛盾，以結構化資料為準。**引用 yfinance 數字時必須附資料日期**（股價用 `as_of` 欄位，例如「截至 2026-05-07」；財報數字用 `period_end` 欄位，例如「2026 Q1（截至 2026-03-31）」）
+6. 財務數字優先採用結構化財務資料（yfinance）；Tavily 的財務數字僅作為背景參考，若與結構化資料矛盾，以結構化資料為準。**引用 yfinance 數字時必須附資料日期**（股價用 `as_of` 欄位，例如「截至 2026-05-07」；財報數字用 `period_end` 欄位，例如「2026 Q1（截至 2026-03-31）」）。**多家公司情境**：context 可能有多個 `[結構化財務資料 — TICKER]` 區塊（如 M&A 雙方），每個區塊對應一家公司的 yfinance 資料，引用時務必指明是哪一家的數字（例：「GME 市值 103.9 億美元（截至 2026-05-11）」），不可混淆來源
 7. **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方公告為準」「資料可能有誤」「本報告基於公開資料」「無法保證準確性」或任何類似的 hedge / disclaimer 語句。FCC 內部研究文件不需要這些，直接陳述事實即可
 8. **禁用空洞修辭** — 任務若涉及數字 / 規模 / 排名 / 市占，必須給具體數值、金額或來源；evidence 沒有就明寫「資料不足」，不得用形容詞替代：
    - 禁用：「成長雙位數」「顯著成長」「大幅提升」「快速擴張」「高速增長」 → 必須給 % 或金額

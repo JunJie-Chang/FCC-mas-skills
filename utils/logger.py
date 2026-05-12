@@ -41,7 +41,7 @@ class AgentLogger:
         self._intern = intern_name if isinstance(intern_name, str) else ", ".join(intern_name)
         self._queries: list[str] = []
         self._sources: list[dict] = []   # {"query": str, "results": [{"title","url","score"}]}
-        self._financial_data: dict = {}  # {"ticker": str, tool_id: data_dict, ...}
+        self._financial_data: dict = {}  # {ticker: {tool_id: data, ...}, ..., "_resolve_failed":[names]} | {"_ticker_error":...}
         self._sector_data: dict = {}     # FinanceDatabase sector scan result
         self._number_items: list[dict] = []  # raw Haiku echo from number_extract
         self._output_path: str = ""
@@ -76,7 +76,13 @@ class AgentLogger:
     def add_financial_data(self, financial_data: dict) -> None:
         """
         Record structured financial data fetched from yfinance.
-        financial_data format: {"ticker": str, tool_id: data_dict, ...}
+
+        Multi-ticker shape (issue #13):
+            {"GME":  {"stock_price": {...}, "financials": {...}, ...},
+             "EBAY": {...},
+             "_resolve_failed": ["..."]}     # optional, names that didn't resolve
+        Or all-fail:
+            {"_ticker_error": "...", "_resolve_failed": [...]}
         """
         self._financial_data = financial_data
 
@@ -157,33 +163,41 @@ class AgentLogger:
 
         if self._financial_data:
             import json
-            if "_ticker_error" in self._financial_data:
+            fin = self._financial_data
+            ticker_keys = [k for k in fin.keys() if not k.startswith("_")]
+            if "_ticker_error" in fin and not ticker_keys:
                 lines.append("--- Financial Data (not fetched) ---")
-                lines.append(f"WARNING: {self._financial_data['_ticker_error']}")
+                lines.append(f"WARNING: {fin['_ticker_error']}")
+                if fin.get("_resolve_failed"):
+                    lines.append(f"Unresolved names: {fin['_resolve_failed']}")
                 lines.append("No structured financial data fetched; report relies on Tavily only.")
+                lines.append("")
             else:
-                ticker = self._financial_data.get("ticker", "unknown")
-                # Aggregate sources actually used by each tool payload
-                sources: dict[str, list[str]] = {}
-                for tool_id, data in self._financial_data.items():
-                    if tool_id == "ticker" or not isinstance(data, dict):
-                        continue
-                    src = data.get("_source", "unknown")
-                    sources.setdefault(src, []).append(tool_id)
-                label = ", ".join(f"{s}: {', '.join(t)}" for s, t in sources.items()) or "unknown"
-                lines.append(f"--- Financial Data ({label}) ---")
-                lines.append(f"Ticker: {ticker}")
-                for tool_id, data in self._financial_data.items():
-                    if tool_id == "ticker":
-                        continue
-                    lines.append(f"[{tool_id}]")
-                    if isinstance(data, dict) and "error" in data:
-                        lines.append(f"  ERROR: {data['error']}")
-                    else:
-                        dumped = json.dumps(data, ensure_ascii=False, default=str, indent=2)
-                        for line in dumped.splitlines():
-                            lines.append(f"  {line}")
-            lines.append("")
+                for ticker in ticker_keys:
+                    payload = fin[ticker]
+                    # Aggregate sources actually used by each tool payload for this ticker
+                    sources: dict[str, list[str]] = {}
+                    for tool_id, data in payload.items():
+                        if not isinstance(data, dict):
+                            continue
+                        src = data.get("_source", "unknown")
+                        sources.setdefault(src, []).append(tool_id)
+                    label = ", ".join(f"{s}: {', '.join(t)}" for s, t in sources.items()) or "unknown"
+                    lines.append(f"--- Financial Data ({ticker} | {label}) ---")
+                    for tool_id, data in payload.items():
+                        lines.append(f"[{tool_id}]")
+                        if isinstance(data, dict) and "error" in data:
+                            lines.append(f"  ERROR: {data['error']}")
+                        else:
+                            dumped = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+                            for line in dumped.splitlines():
+                                lines.append(f"  {line}")
+                    lines.append("")
+                if fin.get("_resolve_failed"):
+                    lines.append(f"--- Financial Data: unresolved names ---")
+                    for n in fin["_resolve_failed"]:
+                        lines.append(f"  {n}")
+                    lines.append("")
 
         if self._number_items:
             lines.append("--- Extracted Numbers (Haiku echo → Python convert) ---")
