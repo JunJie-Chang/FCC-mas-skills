@@ -112,12 +112,40 @@ def _ticker(symbol: str):
 # Strict mode: require ticker to match one of these patterns. Anything else
 # (free-form names, partial codes) is rejected to prevent illegal symbols like
 # "Semiconductor company" leaking into yfinance calls.
+#
+# Note on .SH: yfinance only accepts .SS for SSE-listed symbols (e.g. 601138.SS),
+# not .SH (would 404). But Wind / 同花順 / 新浪財經 / instructions all use .SH,
+# so we accept both at the validation layer and canonicalize to .SS before fetch.
 _VALID_TICKER_RE = re.compile(
     r"^("
     r"[A-Z0-9]{1,5}"                  # US (TSLA, NVDA, BRK.B handled below via .)
-    r"|[A-Z0-9.\-]{1,8}\.(TW|TWO|HK|SZ|SS|T|KS|L|TO|AX|PA|DE|MI|MX|SA|F)"
+    r"|[A-Z0-9.\-]{1,8}\.(TW|TWO|HK|SZ|SS|SH|T|KS|L|TO|AX|PA|DE|MI|MX|SA|F)"
     r")$"
 )
+
+# Inline-ticker pre-filter: matches numeric-prefixed tickers with explicit
+# market suffix in raw instruction text. We deliberately skip US plain-letter
+# patterns ("AI", "USA") to avoid false positives — for US instructions Haiku
+# is reliable. Catches the 工業富聯（601138.SH）case where the literal ticker
+# is in the instruction but Haiku #2 hallucinated a different one (601231.SS).
+_TICKER_INLINE_RE = re.compile(
+    r"\b(\d{3,6}\.(?:SS|SH|SZ|TW|TWO|HK))\b",
+    re.IGNORECASE,
+)
+
+
+def _canonicalize_ticker(ticker: str) -> str:
+    """
+    Map ticker to yfinance-compatible form. Idempotent.
+
+    Currently: .SH → .SS (SSE Shanghai). Other suffixes pass through unchanged.
+    """
+    if not ticker:
+        return ticker
+    t = ticker.strip().upper()
+    if t.endswith(".SH"):
+        t = t[:-3] + ".SS"
+    return t
 
 
 def _is_valid_ticker_format(ticker: str) -> bool:
@@ -125,6 +153,23 @@ def _is_valid_ticker_format(ticker: str) -> bool:
     if not ticker or not isinstance(ticker, str):
         return False
     return bool(_VALID_TICKER_RE.match(ticker.strip().upper()))
+
+
+def _extract_inline_tickers(text: str) -> list[str]:
+    """
+    Find ticker-like tokens (e.g. '601138.SH', '2317.TW') literally present in
+    raw text. Returns canonicalized (.SH → .SS) uppercase strings, dedup.
+    """
+    if not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in _TICKER_INLINE_RE.finditer(text):
+        canon = _canonicalize_ticker(m.group(1))
+        if canon not in seen:
+            seen.add(canon)
+            out.append(canon)
+    return out
 
 
 def _haiku_normalize_ticker(
@@ -218,22 +263,48 @@ def resolve_ticker(
     """
     Try to find a ticker symbol for company_name.
 
-    strict=True (default for financial-data fetching): only Haiku high-confidence
-    + valid format. No fuzzy fallbacks — better to skip the financial layer than
-    feed yfinance an illegal symbol from a fuzzy match.
+    Resolution order (strict mode):
+      Strategy -1: Inline ticker prefilter — if task_context contains a literal
+                   ticker pattern (e.g. '601138.SH'), use it directly. Bypasses
+                   Haiku entirely. Prevents the #17 case where Haiku hallucinated
+                   601231.SS for an instruction literally containing 601138.SH.
+      Strategy 0:  Haiku normalizer (high-confidence + valid format).
+                   Cross-checked against any inline tickers — if Haiku output
+                   conflicts with an inline ticker that's literally in the
+                   instruction, the Haiku output is rejected.
 
     strict=False (legacy / discovery use): three-tier fallback —
       Strategy 0: Haiku normalizer (medium+ confidence accepted)
       Strategy 1: yfinance Search (fuzzy, covers most major markets)
       Strategy 2: FinanceDatabase equity search (broader but slower)
 
-    Returns the symbol string, or None if not resolvable under the chosen mode.
+    Returns the symbol string (canonicalized, e.g. .SS), or None if not resolvable.
     """
+    # Strategy -1 — inline ticker prefilter (instruction字面值優先)
+    # Searches both company_name (might already contain ticker like "工業富聯（601138.SH）")
+    # and the broader task_context.
+    inline_tickers = _extract_inline_tickers(f"{company_name} {task_context}")
+    if inline_tickers:
+        sym = inline_tickers[0]
+        if _is_valid_ticker_format(sym):
+            print(f"[financial_tools] inline ticker → {sym}")
+            return sym
+
     # Strategy 0 — Haiku normalizer (works in both modes)
     symbol = _haiku_normalize_ticker(company_name, task_context, strict=strict)
     if symbol:
-        print(f"[financial_tools] Haiku → {symbol}")
-        return symbol
+        canon = _canonicalize_ticker(symbol)
+        # Cross-check: if Haiku gave a ticker that conflicts with one literally
+        # in the instruction, prefer the literal (or refuse). This catches the
+        # case where Haiku #2 hallucinates a different but plausible ticker.
+        if inline_tickers and canon not in inline_tickers:
+            print(
+                f"[financial_tools] ⚠ Haiku ticker {canon} conflicts with "
+                f"inline ticker(s) {inline_tickers}; using inline"
+            )
+            return inline_tickers[0]
+        print(f"[financial_tools] Haiku → {canon}")
+        return canon
 
     if strict:
         # No fuzzy fallback in strict mode — caller will skip financial fetching
@@ -490,8 +561,14 @@ def fetch_all(symbol: str, tools: list[str]) -> dict:
     Fetch data for each requested tool with _CALL_DELAY between calls.
     Returns {"ticker": symbol, "tool_id": data_dict, ...}.
     Unknown tool ids are skipped with a warning.
+
+    Symbol is canonicalized to yfinance form (.SH → .SS) before fetch — direct
+    tickers from check_financial_need (Haiku #1) may carry .SH from instructions.
     """
-    results: dict = {"ticker": symbol}
+    canon = _canonicalize_ticker(symbol)
+    if canon != symbol:
+        print(f"[financial_tools] canonicalize {symbol} → {canon}")
+    results: dict = {"ticker": canon}
     valid = [t for t in tools if t in TOOL_REGISTRY]
     unknown = [t for t in tools if t not in TOOL_REGISTRY]
     if unknown:
@@ -500,7 +577,7 @@ def fetch_all(symbol: str, tools: list[str]) -> dict:
     for i, tool_id in enumerate(valid):
         if i > 0:
             time.sleep(_CALL_DELAY)
-        print(f"[financial_tools] fetching {tool_id} for {symbol}…")
-        results[tool_id] = TOOL_REGISTRY[tool_id](symbol)
+        print(f"[financial_tools] fetching {tool_id} for {canon}…")
+        results[tool_id] = TOOL_REGISTRY[tool_id](canon)
 
     return results

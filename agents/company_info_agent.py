@@ -289,7 +289,7 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
         {"_ticker_error": "...", "_resolve_failed": [...]}
     """
     from utils.financial_tools import (
-        _is_valid_ticker_format, fetch_all, resolve_ticker,
+        _canonicalize_ticker, _is_valid_ticker_format, fetch_all, resolve_ticker,
     )
 
     check = state["financial_check"]
@@ -301,7 +301,9 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
     rejected_direct: list[str] = []
     for t in direct:
         if _is_valid_ticker_format(t):
-            resolved.append(t.upper())
+            # Canonicalize to yfinance form (.SH → .SS) so downstream keys
+            # match what fetch_all returns under "ticker".
+            resolved.append(_canonicalize_ticker(t))
         else:
             rejected_direct.append(t)
     for r in rejected_direct:

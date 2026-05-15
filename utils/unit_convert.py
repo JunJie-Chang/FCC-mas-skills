@@ -15,15 +15,26 @@ Conversion rules (deterministic):
 Percent and ratio passthroughs:
     scale == "percent" → "{value}%"
     scale == "ratio"   → echo raw (e.g. "1.2x")
+
+Chinese-unit scales (added per #16 — symmetric to issue #8's English-unit case):
+    "ten_thousand"    = 1e4   for 中文「萬」
+    "hundred_million" = 1e8   for 中文「億」（注意：≠ 英文 billion=1e9）
+    "trillion"        = 1e12  for 中文「兆」、英文 trillion 共用
 """
 
 # Scale word → base-unit multiplier.
+# Note: Chinese scales (ten_thousand / hundred_million) intentionally listed
+# alongside English ones; they convert to the same base units, but echoing
+# Chinese 億 as scale="hundred_million" rather than "billion" prevents the
+# 10× inflation bug where Haiku would map 中文「億」 → English "billion" (1e9).
 SCALE_MULTIPLIERS: dict[str, float] = {
-    "plain":    1.0,
-    "thousand": 1e3,
-    "million":  1e6,
-    "billion":  1e9,
-    "trillion": 1e12,
+    "plain":           1.0,
+    "ten_thousand":    1e4,    # 中文「萬」
+    "thousand":        1e3,
+    "million":         1e6,
+    "hundred_million": 1e8,    # 中文「億」(NOT English billion)
+    "billion":         1e9,
+    "trillion":        1e12,   # 中文「兆」/ English trillion
 }
 
 # Currency ISO / symbol / alias → Chinese name.
@@ -96,7 +107,7 @@ def to_chinese_amount(value: float, scale: str, currency: str) -> str:
 
 if __name__ == "__main__":
     cases = [
-        # GameStop/eBay case — the original bug
+        # GameStop/eBay case — the original #8 bug (English billion → 億)
         ((56,  "billion",  "USD"), "560 億美元"),
         ((9,   "billion",  "USD"), "90 億美元"),
         ((9.4, "billion",  "USD"), "94 億美元"),
@@ -115,6 +126,24 @@ if __name__ == "__main__":
         ((21.7,"percent",  ""),    "21.7%"),
         # Ratio passthrough
         ((1.2, "ratio",    ""),    "1.2x"),
+        # Chinese-unit cases (issue #16 — symmetric to #8)
+        # 「億」 must NOT be treated as English billion — these would produce 10× wrong values
+        # if Haiku echoed scale="billion" instead of "hundred_million":
+        ((140,    "hundred_million", "TWD"), "140 億新台幣"),       # 國泰金 Mayapada 損失
+        ((8.67,   "hundred_million", "CNY"), "8.67 億人民幣"),      # 佰維存儲 2025 淨利
+        ((112.96, "hundred_million", "CNY"), "112.96 億人民幣"),    # 佰維存儲 2025 營收
+        ((34.25,  "hundred_million", "CNY"), "34.25 億人民幣"),     # 佰維 Q4 營收下緣
+        ((6174,   "hundred_million", "TWD"), "6,174 億新台幣"),     # 國壽股東權益 (邊界：保持億，不進兆)
+        # 「兆」 — both Chinese 兆 and English trillion share scale="trillion"
+        ((1.43,   "trillion",        "CNY"), "1.43 兆人民幣"),      # 工業富聯市值
+        ((0.6174, "trillion",        "TWD"), "6,174 億新台幣"),     # 同上換 scale 仍應同字串
+        # 「萬」
+        ((1.4,    "ten_thousand",    ""),    "1.4 萬"),
+        ((934.26, "ten_thousand",    ""),    "934.26 萬"),
+        # 智伸科 capex case (was: '6 billion' echoed wrong → '60 億人民幣')
+        # Correct echo: 中文 "6 億新台幣" → scale="hundred_million", currency="TWD"
+        ((6,      "hundred_million", "TWD"), "6 億新台幣"),
+        ((10,     "hundred_million", "TWD"), "10 億新台幣"),
     ]
 
     fails = 0

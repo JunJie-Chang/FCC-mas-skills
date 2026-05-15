@@ -203,7 +203,15 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 **注入點**：`generate_report` context 的最後一段（在 evidence / financial_data / sector_data 之後），透過 `format_for_prompt(numbers_zh)` 渲染。Synthesizer rule 9 強制 echo。
 
-**Scale 字典**（`SCALE_MULTIPLIERS` in `utils/unit_convert.py`）：`plain / thousand / million / billion / trillion`，加上 `percent` / `ratio` 兩個 passthrough。
+**Scale 字典**（`SCALE_MULTIPLIERS` in `utils/unit_convert.py`）：`plain / ten_thousand / thousand / million / hundred_million / billion / trillion`，加上 `percent` / `ratio` 兩個 passthrough。
+
+**中英 scale 對應**（issue #16 — 對稱於 #8 的反向 case）：
+- 中文「萬」 → `ten_thousand` (1e4)
+- 中文「億」 → `hundred_million` (1e8)  **← 不是 billion（1e9 差 10 倍）**
+- 中文「兆」 → `trillion` (1e12)
+- 英文 thousand/million/billion/trillion → 同名 scale
+
+`number_extract.py` 的 Haiku echo prompt 強制：中文「億」/「亿」echo 為 `hundred_million`、不要翻譯成 `billion`。違反這條會產生 10× inflation bug（佰維 8.67 億 → 86.7 億、國泰 140 億 → 1,400 億 等實際案例）。
 
 **Currency 字典**（`CURRENCY_ZH`）：USD/TWD/NTD/HKD/CNY/RMB/JPY/EUR/GBP/KRW/SGD → 中文名。
 
@@ -215,7 +223,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 **成本**：每次 agent run 多一次 Haiku 呼叫（evidence cap 50k 字元），約 $0.01-0.02 等級。
 
-**Self-test**：`python3.13 utils/unit_convert.py` 跑 13 個 case（含 GameStop 9 vs 9.4 billion）；所有 case 過才能 ship。新增 scale / currency 時加 case。
+**Self-test**：`python3.13 utils/unit_convert.py` 跑 24 個 case（含 #8 的 GameStop 9 vs 9.4 billion 與 #16 的中文「億」/「兆」/「萬」回歸）；所有 case 過才能 ship。新增 scale / currency 時加 case。
 
 **目前接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若會引用 evidence 數字，照樣插入 `evaluate(done) → extract_numbers → generate_report` 並在 prompt 加 rule 9。
 
@@ -323,9 +331,14 @@ Financial / sector data 以結構化 JSON 注入 `generate_report` context；財
 
 **Ticker 解析（`resolve_ticker(strict=True)` 為新預設）**：
 
-`strict=True`（預設，給 `fetch_financial_data` 用）：
-- `_haiku_normalize_ticker(strict=True)` — Haiku 必須 `confidence=high` 且 ticker 通過 `_VALID_TICKER_RE`（US ≤5 字母 / `.TW/.TWO/.HK/.SZ/.SS/.T/.KS/.L/.TO/.AX/.PA/.DE` 等市場後綴）；medium 直接擋掉
-- 不走 yf.Search / FinanceDatabase fuzzy fallback — 寧可跳過財務層，也不餵 yfinance 非法 symbol（如 `industry='semiconductor company'`）
+`strict=True`（預設，給 `fetch_financial_data` 用），三段順序：
+1. **Inline ticker prefilter**（issue #17）— 用 `_TICKER_INLINE_RE` 在 `company_name + task_context` 字面找明確 ticker pattern（如 `601138.SH`、`2317.TW`），找到就直接 return，bypass Haiku。專治 instruction 字面已給 ticker 但 Haiku #2 hallucinate 成別家公司的 case
+2. **Haiku normalizer**（`_haiku_normalize_ticker(strict=True)`）— Haiku 必須 `confidence=high` 且 ticker 通過 `_VALID_TICKER_RE`（US ≤5 字母 / `.TW/.TWO/.HK/.SZ/.SS/.SH/.T/.KS/.L/.TO/.AX/.PA/.DE` 等市場後綴）；medium 直接擋掉
+3. **Cross-check**：若 inline prefilter 找到的 ticker 跟 Haiku 給的不同，採用 inline 的（防 Haiku 寧可亂猜也不 return null）
+
+不走 yf.Search / FinanceDatabase fuzzy fallback — 寧可跳過財務層，也不餵 yfinance 非法 symbol（如 `industry='semiconductor company'`）。
+
+**`.SH` → `.SS` canonicalization**：上交所 ticker 在 Wind / 同花順 / 新浪財經 / CY 口述用 `.SH`，但 yfinance 只認 `.SS`（用 `.SH` 會 404）。`_canonicalize_ticker()` 在 `resolve_ticker` / `fetch_all` / agent 的 direct ticker 收集處統一轉換。`_VALID_TICKER_RE` 接受兩種輸入。
 
 `strict=False`（legacy 路徑，可給未來 discovery / sector 用）：
 - 三段 fallback：Haiku（high+medium）→ yf.Search → FinanceDatabase

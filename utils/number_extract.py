@@ -153,21 +153,46 @@ def extract_numbers(
 任務指令：{task_instruction}
 
 【硬規則】
-1. **只 echo，不計算**：evidence 寫 "$9.4 billion" 就 value=9.4, scale="billion"，**不要**自己把它換算成 9400000000 或「94 億」
-2. **單位忠實**：scale 只能是 [{scale_keys}, percent, ratio] 之一；不確定就用 "plain"
-3. **貨幣忠實**：currency 只能是 [{currency_keys}] 之一；evidence 沒明寫貨幣別就填 null
-4. **百分比與倍數**：scale 設 "percent" 或 "ratio"，currency 填 null
-5. **label 用任務語境命名**：例如併購案的「現金部分」用 `cash_portion`、「總交易金額」用 `deal_value_total`、「溢價」用 `premium_pct`；不要用 number_1 / value_2 這種無意義 key
-6. **同一個數字多次出現**：只 echo 一次（取最早出現位置）
-7. **不確定的數字**：寧可漏掉也不要捏造；evidence 裡找不到的數字一律不寫
-8. **與任務無關的廣告 / 推薦欄數字**：忽略
+1. **只 echo，不計算、不換算**：value 直接用原文寫的數字；scale 用對應的單位字。對照表：
+
+   原文寫                              → value, scale
+   ──────────────────────────────────────────────────────────────────────
+   英文 "$9.4 billion"                  → value=9.4,  scale="billion"
+   英文 "$1.5 trillion"                 → value=1.5,  scale="trillion"
+   英文 "$500 million"                  → value=500,  scale="million"
+   中文「9.4 億美元」「140 億新台幣」    → scale="hundred_million"   ← 中文「億」
+   中文「8.67 亿元」「34.25 亿元」       → scale="hundred_million"   ← 簡體「亿」也是
+   中文「1.5 兆人民幣」「5.2 兆新台幣」  → scale="trillion"           ← 中文「兆」
+   中文「1.4 萬」「934.26 萬股」         → scale="ten_thousand"       ← 中文「萬」
+   中文純數字「2,510 億」（無幣別）      → value=2510, scale="hundred_million", currency=null
+   百分比「46%」「年增 56.52%」          → scale="percent", currency=null
+   倍數「3.8 倍」「1.5x」                → scale="ratio",   currency=null
+
+2. **絕對禁止：把中文「億」echo 成 scale="billion"**
+   中文「億」= 1e8，英文 billion = 1e9，差 10 倍。把中文「140 億」echo 成 scale="billion" 會被下游算成「1,400 億」，這是 issue #16 的根因。
+   同理：中文「萬」≠ million；中文「兆」= trillion 是對的（量級剛好對）。
+
+3. **貨幣忠實**：currency 只能是 [{currency_keys}] 之一；evidence 沒明寫貨幣別就填 null。
+   中文「人民幣 / 元 / 元人民幣 / RMB」→ "CNY"；「新台幣 / NT$」→ "TWD"；「美元 / 美金 / USD / $」→ "USD"；「港幣 / HK$」→ "HKD"。
+
+4. **scale 的 enum**：scale 只能是 [{scale_keys}, percent, ratio] 之一；不確定就用 "plain"。
+
+5. **label 用任務語境命名**：例如併購案的「現金部分」用 `cash_portion`、「總交易金額」用 `deal_value_total`、「溢價」用 `premium_pct`；不要用 number_1 / value_2 這種無意義 key。
+
+6. **同一個數字多次出現**：只 echo 一次（取最早出現位置）。
+
+7. **不確定的數字**：寧可漏掉也不要捏造；evidence 裡找不到的數字一律不寫。
+
+8. **與任務無關的廣告 / 推薦欄 / 其他公司的數字**：忽略。
 
 回傳純 JSON 陣列：
 [
-  {{"label": "deal_value_total",   "raw": "$56 billion",  "value": 56,   "scale": "billion", "currency": "USD"}},
-  {{"label": "cash_portion",        "raw": "$9 billion",   "value": 9,    "scale": "billion", "currency": "USD"}},
-  {{"label": "cash_portion_cohen",  "raw": "$9.4 billion", "value": 9.4,  "scale": "billion", "currency": "USD"}},
-  {{"label": "premium_unaffected",  "raw": "46%",          "value": 46,   "scale": "percent", "currency": null}}
+  {{"label": "deal_value_total",   "raw": "$56 billion",   "value": 56,    "scale": "billion",         "currency": "USD"}},
+  {{"label": "cash_portion_cohen", "raw": "$9.4 billion",  "value": 9.4,   "scale": "billion",         "currency": "USD"}},
+  {{"label": "premium_unaffected", "raw": "46%",           "value": 46,    "scale": "percent",         "currency": null}},
+  {{"label": "loss_recognized",    "raw": "140 億新台幣",   "value": 140,   "scale": "hundred_million", "currency": "TWD"}},
+  {{"label": "net_profit_2025",    "raw": "8.67 亿元",      "value": 8.67,  "scale": "hundred_million", "currency": "CNY"}},
+  {{"label": "capex_upper",        "raw": "10 億",          "value": 10,    "scale": "hundred_million", "currency": null}}
 ]
 
 evidence（前 {_EVIDENCE_CHAR_CAP // 1000}k 字元）：
