@@ -77,6 +77,8 @@ python3.13 main.py --audio recording.m4a --type speech_ppt --intern "Justin"
 ```
 STT (utils/stt.py)
     ↓
+subject_review (utils/subject_review.py) — 只在 --audio 路徑跑；--yes 跳過
+    ↓
 parse_tasks() (utils/planner.py) — haiku 解析 + 分類，max_tokens=4096
     ↓
 confirm() — CLI 互動：y 確認 / n 取消 / [數字] 修改 / d[數字] 刪除 / a 新增 / m a,b[,c] 合併
@@ -85,6 +87,8 @@ router.dispatch(task, intern_name, task_date, subdir, mode)
     ↓
 agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 ```
+
+**STT subject review（`utils/subject_review.py`）**：Whisper 轉錄完之後跑一次 Haiku 抽出轉錄文中的專有名詞主體（公司 / 人名 / 機構 / 課程），給每個主體標 suspect（疑似 STT 錯字）+ 前後 ~10 字 context。使用者用 CLI 互動逐條確認；輸入 `[編號]` + 新名稱會把該字串在轉錄文中 replace all，Enter 全部正確就繼續。修正後的轉錄文才交給 `parse_tasks`。目的：把 STT 錯字（如「資深客」→「智伸科」、「工業負面」→「工業富聯」）在最上游一刀解掉，避免下游 planner / Tavily / agent 在錯誤字面上做累積誤判。`--input` 路徑不跑（使用者打字本就是有意）；`--yes` 也跳過。成本：每次 1 個 Haiku 呼叫（幾分美元）。
 
 ### Agent 清單
 | agent_type | 檔案 | 說明 |

@@ -98,6 +98,16 @@ def main():
         from utils.stt import transcribe
         raw_instruction = transcribe(audio_path)
         print(f"\n── 轉錄結果 ──\n{raw_instruction}\n")
+
+        # ── Step 1b: STT subject review (audio path only, skipped by --yes) ──
+        # Surface proper-noun mentions so user can fix STT mishears BEFORE
+        # parse_tasks. Cheaper and more accurate than trying to recover
+        # from "資深客" / "工業負面" downstream.
+        if not args.yes:
+            from utils.subject_review import extract_subject_mentions, review_subjects
+            print("正在偵測主體名稱...")
+            mentions = extract_subject_mentions(raw_instruction)
+            raw_instruction = review_subjects(raw_instruction, mentions)
     else:
         raw_instruction = args.input
 
