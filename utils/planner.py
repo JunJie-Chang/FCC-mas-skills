@@ -127,8 +127,18 @@ def parse_tasks(
 - 每個元素有三個欄位：
   - "agent_type": 從上方清單選一個最符合的
   - "label": 簡短繁體中文標籤，顯示在 terminal 讓使用者確認
-  - "instruction": 完整的執行指令，直接傳給 AI（必須包含所有關鍵識別符，如股票代碼、英文名）
+  - "instruction": 完整的執行指令，直接傳給 AI；**逐字保留原指令中的所有識別符**（中文公司名 / 人名、股票代碼、原指令中明確提到的英文名）
 - 若只有一個任務，也回傳長度為 1 的陣列
+
+【公司／人物名稱保留 — 重要】
+- 中文公司名 / 人名一律 echo 原文，**禁止意譯成英文**；label 與 instruction 都不可加你自己想出來的英文翻譯
+  ❌ 「巨漢」→ "Giant" 或 「巨漢 (Giant)」
+  ❌ 「佰維」→ "Hundred Wei" 或 「佰維 (Hundred)」
+  ❌ 「智伸科」→ "Wisdom Tech" 或 「智伸科 (Wise Stretch Tech)」
+  ❌ 「國霖」→ "Guolin" 或 「國霖 (National Lin)」
+- 若原指令同時給了中文名 + ticker（如「英維克 002837.SZ」），兩個都保留
+- 若原指令本身就明寫英文名（如「Tesla TSLA」「TSMC 2330.TW」），保留英文形態
+- 不確定該公司的官方英文名 → 不要編，直接用中文
 
 【合併規則 — 重要】
 - 若多個敘述指向同一個研究對象（同一家公司、同一個人、同一個主題），必須合併成「一條任務」，把所有面向都寫進 instruction，不可拆開
@@ -148,8 +158,8 @@ def parse_tasks(
 [
   {{
     "agent_type": "company_info",
-    "label": "英維克 (002837.SZ) — 業務、財務、競爭",
-    "instruction": "調查英維克（Envicool, 深圳上市 002837.SZ），涵蓋業務結構、財務表現與競爭優勢"
+    "label": "英維克 002837.SZ — 業務、財務、競爭",
+    "instruction": "調查英維克 002837.SZ，涵蓋業務結構、財務表現與競爭優勢"
   }},
   {{
     "agent_type": "sector_scan",

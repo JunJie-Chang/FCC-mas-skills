@@ -208,8 +208,20 @@ def _haiku_normalize_ticker(
 公司候選：{company_name}
 任務內容：{task_context or '(無)'}
 
-規則：
+【硬規則 — 中文公司名不得意譯】
+- 不要把中文公司名拆字翻成英文常見字後，去找「碰巧同名」的英文公司
+  ❌ 「巨漢」→ Giant → 誤對應「巨大機械 9921 Giant Bicycles」（巨漢實際為 6903 巨漢系統科技）
+  ❌ 「佰維」→ Hundred → 應為官方英文 "BIWIN"（688525.SS 佰維存儲）
+  ❌ 「智伸」→ Wisdom / Wise → 應為官方英文 "Joen Lih"（4551.TW 智伸科）
+  ❌ 「國霖」→ Guolin / National Lin
+- 只在 high-confidence 知道該公司有官方英文名（港交所英文名 / SEC filing 英文名 / 公司官網英文 logo）時，才能用英文形態思考
+- 不確定官方英文名 → 直接以中文公司名查 ticker；查不到就 confidence=low → null
+- 寧可 null 也不要把「字面翻譯後剛好存在的另一家上市公司」的 ticker 套上去
+
+【市場 / 後綴規則】
 - 台股上市 .TW、上櫃 .TWO；港股 .HK；陸股深圳 .SZ、上海 .SS；美股純字母（如 TSLA、NVDA）；日股 .T；韓股 .KS
+
+【信心門檻】
 - 若資訊指向的是產業、地區、或多家公司，ticker=null
 - 不確定就 null，不要亂猜；confidence=low 時也視為 null
 - 回傳純 JSON，無 markdown 包裝
