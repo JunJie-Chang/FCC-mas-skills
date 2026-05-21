@@ -140,6 +140,6 @@ def transcribe(audio_path: str | Path) -> str:
             print("[stt] ⚠ 轉錄結果疑似退化迴圈，請確認音檔品質")
 
     from utils.cost_tracker import tracker
-    tracker.record_whisper(duration)
+    tracker.record_stt(duration)
 
     return _to_traditional(transcript)

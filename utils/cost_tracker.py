@@ -4,7 +4,7 @@ utils/cost_tracker.py — Session cost estimator.
 Usage in any agent:
     from utils.cost_tracker import tracker
     tracker.record_claude(model, input_tokens, output_tokens)
-    tracker.record_whisper(duration_seconds)
+    tracker.record_stt(duration_seconds)
     tracker.record_dalle(n_images)
     tracker.record_tavily(n_calls)
 
@@ -28,8 +28,8 @@ _CLAUDE_PRICES = {
 
 _TASK_COST_WARN_USD = 0.30   # print ⚠ if a single task exceeds this
 
-_WHISPER_PER_SECOND = 0.006 / 60   # $0.006/min
-_DALLE3_PER_IMAGE   = 0.04          # standard 1024×1024
+_STT_PER_SECOND   = 0.006 / 60   # $0.006/min — same rate for gpt-4o-transcribe and whisper-1
+_DALLE3_PER_IMAGE = 0.04          # standard 1024×1024
 # Tavily: free tier tracked as call count only (no $ estimate)
 
 
@@ -41,11 +41,11 @@ class CostTracker:
 
     def reset(self):
         self._claude: list[dict] = []   # {model, in_tok, out_tok, cost}
-        self._whisper_sec: float = 0.0
+        self._stt_sec: float = 0.0
         self._dalle_images: int = 0
         self._tavily_calls: int = 0
         self._ckpt_claude: int = 0
-        self._ckpt_whisper: float = 0.0
+        self._ckpt_stt: float = 0.0
         self._ckpt_tavily: int = 0
         self._ckpt_dalle: int = 0
         self._warned_models: set = set()
@@ -65,8 +65,8 @@ class CostTracker:
             "cost":    cost,
         })
 
-    def record_whisper(self, duration_seconds: float) -> None:
-        self._whisper_sec += duration_seconds
+    def record_stt(self, duration_seconds: float) -> None:
+        self._stt_sec += duration_seconds
 
     def record_dalle(self, n_images: int = 1) -> None:
         self._dalle_images += n_images
@@ -78,28 +78,28 @@ class CostTracker:
 
     def print_task_summary(self) -> None:
         """Print cost for this task only (since last checkpoint), then advance."""
-        task_claude  = self._claude[self._ckpt_claude:]
-        task_whisper = self._whisper_sec - self._ckpt_whisper
-        task_tavily  = self._tavily_calls - self._ckpt_tavily
-        task_dalle   = self._dalle_images - self._ckpt_dalle
+        task_claude = self._claude[self._ckpt_claude:]
+        task_stt    = self._stt_sec - self._ckpt_stt
+        task_tavily = self._tavily_calls - self._ckpt_tavily
+        task_dalle  = self._dalle_images - self._ckpt_dalle
 
-        self._ckpt_claude  = len(self._claude)
-        self._ckpt_whisper = self._whisper_sec
-        self._ckpt_tavily  = self._tavily_calls
-        self._ckpt_dalle   = self._dalle_images
+        self._ckpt_claude = len(self._claude)
+        self._ckpt_stt    = self._stt_sec
+        self._ckpt_tavily = self._tavily_calls
+        self._ckpt_dalle  = self._dalle_images
 
         in_tok     = sum(r["in_tok"]  for r in task_claude)
         out_tok    = sum(r["out_tok"] for r in task_claude)
         claude_usd = sum(r["cost"]    for r in task_claude)
-        whisper_usd = task_whisper * _WHISPER_PER_SECOND
+        stt_usd    = task_stt * _STT_PER_SECOND
         dalle_usd  = task_dalle * _DALLE3_PER_IMAGE
-        total_usd  = claude_usd + whisper_usd + dalle_usd
+        total_usd  = claude_usd + stt_usd + dalle_usd
 
         parts = []
         if task_claude:
             parts.append(f"Claude {in_tok:,}in+{out_tok:,}out tok  ${claude_usd:.4f}")
-        if task_whisper:
-            parts.append(f"Whisper {task_whisper/60:.1f}min  ${whisper_usd:.4f}")
+        if task_stt:
+            parts.append(f"STT {task_stt/60:.1f}min  ${stt_usd:.4f}")
         if task_dalle:
             parts.append(f"DALL-E {task_dalle} img  ${dalle_usd:.4f}")
         if task_tavily:
@@ -113,10 +113,10 @@ class CostTracker:
     # ── Report ────────────────────────────────────────────────────────────────
 
     def total_usd(self) -> float:
-        claude_total  = sum(r["cost"] for r in self._claude)
-        whisper_total = self._whisper_sec * _WHISPER_PER_SECOND
-        dalle_total   = self._dalle_images * _DALLE3_PER_IMAGE
-        return claude_total + whisper_total + dalle_total
+        claude_total = sum(r["cost"] for r in self._claude)
+        stt_total    = self._stt_sec * _STT_PER_SECOND
+        dalle_total  = self._dalle_images * _DALLE3_PER_IMAGE
+        return claude_total + stt_total + dalle_total
 
     def print_summary(self) -> None:
         print("\n" + "=" * 44)
@@ -139,10 +139,10 @@ class CostTracker:
                       f"{d['in']:>7,} in + {d['out']:>6,} out tok   "
                       f"${d['cost']:.4f}")
 
-        if self._whisper_sec:
-            cost = self._whisper_sec * _WHISPER_PER_SECOND
-            mins = self._whisper_sec / 60
-            print(f"  Whisper STT       {mins:>7.1f} min                  ${cost:.4f}")
+        if self._stt_sec:
+            cost = self._stt_sec * _STT_PER_SECOND
+            mins = self._stt_sec / 60
+            print(f"  STT               {mins:>7.1f} min                  ${cost:.4f}")
 
         if self._dalle_images:
             cost = self._dalle_images * _DALLE3_PER_IMAGE
