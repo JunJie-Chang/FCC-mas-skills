@@ -229,7 +229,45 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 
 **Self-test**：`python3.13 utils/unit_convert.py` 跑 24 個 case（含 #8 的 GameStop 9 vs 9.4 billion 與 #16 的中文「億」/「兆」/「萬」回歸）；所有 case 過才能 ship。新增 scale / currency 時加 case。
 
-**目前接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若會引用 evidence 數字，照樣插入 `evaluate(done) → extract_numbers → generate_report` 並在 prompt 加 rule 9。
+**目前接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若會引用 evidence 數字，照樣插入 `evaluate(done) → extract_numbers → verify → generate_report` 並在 prompt 加 rule 9。
+
+### Premise / Coverage Validation Layer（`utils/premise_validate.py`）
+
+**為什麼存在**：issue #19 / #7 / #4 同源 — `evaluate` node 只判「搜得夠不夠」，不判「能不能答 CY 真正問的事」。失敗模式：
+- #7 環旭越南廠：找到對的一手 PDF，但報告用「戰略佈局」「重要環節」填空，沒抓進具體產能 / 廠址 / 投資金額
+- #19 國泰金 Mayapada「政大校長介紹」：所有 evidence 沒提此事，synthesizer 卻**迂迴**用「某董事畢業於政大」這類沾邊事實撐起這條 premise，掩蓋 unverified 狀態
+
+根因：synthesizer 訓練分布的 helpfulness 慣性蓋過「資料不足明寫」prompt rule。需要更**結構化**的契約強制。
+
+**插入點**：`evaluate(done) → extract_numbers → verify → generate_report`。`verify` 跑在 `extract_numbers` 之後、`generate_report` 之前。
+
+**verify_node 行為**：Haiku 把 instruction 拆成兩個結構化清單：
+- `premises[]` — 任務指令中的**斷言**（「市值比鴻海高」「投資 4 億美金」「政大校長介紹」）
+- `deliverables[]` — 任務指令要答的**問題 / 資料點**（「越南廠址」「年產能」「漲幅多少」）
+
+對每條根據 evidence 標 status：
+| Type | Statuses |
+|---|---|
+| Premise | `confirmed` / `partial` / `unverified` |
+| Deliverable | `answered` / `partial` / `missing` |
+
+**結構化拆解規則**（prompt 內強制）：任務若提到產能 / 規模 / 金額 / 員工數 / 廠址 / 時程 / 產品線 / 排名，**每一項拆成獨立 deliverable**，不可合併成「基本資料」這種模糊類別 — 這條防 #7 的核心失誤。
+
+**禁止 sound-adjacent fill**：prompt 明寫「instruction 說『政大校長介紹』，evidence 只提到『某董事畢業於政大』— 這條 premise 必須 `unverified`，不可 `partial` 或 `confirmed`」。
+
+**注入點**：`generate_report` context 最後一段（在 evidence / financial_data / sector_data / numbers_zh 之後），透過 `format_for_prompt(validation)` 渲染 `[前提驗證 / 覆蓋度檢查]` 區塊。
+
+**Synthesizer prompt rule 10**（兩個 agent 同步加）強制：
+- `[unverified]` premise → 必須明寫「任務指令所述『X』，本次搜尋資料無法驗證」；**禁止用沾邊 evidence 撐起**
+- `[partial]` premise → 明寫確認的部分、明標未確認的部分
+- `[missing]` deliverable → 必須明寫「資料不足，無法回答 X」；**禁止用「戰略佈局」「重要環節」「持續發展」等抽象詞替代**
+- `[partial]` deliverable → 寫出找到的部分，明標未抓到的具體數值 / 名稱 / 日期
+
+**Audit trail**：完整 validation（含每條 status / note / evidence_url）寫入 `.log` 的 `--- Premise Validation ---` 區塊（`AgentLogger.add_validation`），給校稿時對照「instruction 哪些前提沒驗到 / 哪些問題沒答到」用。
+
+**Cost**：每 agent run 多 1 個 Haiku（拆解 + status 判定），evidence cap 50k chars，~$0.01-0.02。
+
+**接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若有結構化前提 / 問題清單，照樣插入 `extract_numbers → verify → generate_report`，並在 generate_report prompt 加 rule 10。
 
 ### 時間錨點 helper（`config.time_context()`）
 所有觸及「最新」「最近一季」「去年」「年初至今」等相對時間的 LLM prompt 都要在開頭注入 `config.time_context()`。注入點：

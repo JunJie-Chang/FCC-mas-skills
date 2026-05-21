@@ -44,6 +44,7 @@ class AgentLogger:
         self._financial_data: dict = {}  # {ticker: {tool_id: data, ...}, ..., "_resolve_failed":[names]} | {"_ticker_error":...}
         self._sector_data: dict = {}     # FinanceDatabase sector scan result
         self._number_items: list[dict] = []  # raw Haiku echo from number_extract
+        self._validation: dict = {}          # premises + deliverables from premise_validate
         self._output_path: str = ""
         self._started = datetime.now()
 
@@ -85,6 +86,10 @@ class AgentLogger:
             {"_ticker_error": "...", "_resolve_failed": [...]}
         """
         self._financial_data = financial_data
+
+    def add_validation(self, validation: dict) -> None:
+        """Record premise + coverage validation from utils/premise_validate."""
+        self._validation = validation or {}
 
     def add_extracted_numbers(self, items: list[dict]) -> None:
         """
@@ -207,6 +212,33 @@ class AgentLogger:
                 zh = it.get("zh", "")
                 lines.append(f"  {label}: raw={raw!r}  →  zh={zh!r}")
             lines.append("")
+
+        if self._validation:
+            premises = self._validation.get("premises") or []
+            deliverables = self._validation.get("deliverables") or []
+            if premises or deliverables:
+                lines.append("--- Premise Validation ---")
+                if premises:
+                    lines.append("Premises（任務指令斷言）：")
+                    for p in premises:
+                        tag = {"confirmed": "✓", "partial": "△", "unverified": "✗"}.get(p.get("status", ""), "?")
+                        lines.append(f"  {tag} [{p.get('status', '')}] {p.get('claim', '')}")
+                        if p.get("note"):
+                            lines.append(f"      note: {p['note']}")
+                        if p.get("evidence_url"):
+                            lines.append(f"      url:  {p['evidence_url']}")
+                if deliverables:
+                    if premises:
+                        lines.append("")
+                    lines.append("Deliverables（任務指令問題 / 資料點）：")
+                    for d in deliverables:
+                        tag = {"answered": "✓", "partial": "△", "missing": "✗"}.get(d.get("status", ""), "?")
+                        lines.append(f"  {tag} [{d.get('status', '')}] {d.get('question', '')}")
+                        if d.get("note"):
+                            lines.append(f"      note: {d['note']}")
+                        if d.get("evidence_url"):
+                            lines.append(f"      url:  {d['evidence_url']}")
+                lines.append("")
 
         lines.append("--- Output ---")
         lines.append(f"File: {self._output_path}")

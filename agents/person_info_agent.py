@@ -48,6 +48,7 @@ class PersonInfoState(TypedDict):
     search_results: list[dict]
     number_items: list[dict]
     numbers_zh: dict
+    validation: dict
     report: dict
     output_path: str
     log_path: str
@@ -175,6 +176,21 @@ def extract_numbers_node(state: PersonInfoState) -> dict:
     return {"number_items": items, "numbers_zh": numbers_zh}
 
 
+# ── Node 2c: verify (premise + coverage check) ───────────────────────────────
+
+def verify_node(state: PersonInfoState) -> dict:
+    """Decompose instruction into premises + deliverables and stamp each with
+    an evidence-grounded status. Forces synthesizer to mark unverified
+    premises and missing deliverables explicitly (issue #19)."""
+    from utils.premise_validate import validate
+
+    validation = validate(
+        task_instruction=state["task_instruction"],
+        evidence=state.get("evidence", []),
+    )
+    return {"validation": validation}
+
+
 # ── Node 3: generate_report ───────────────────────────────────────────────────
 
 def generate_report(state: PersonInfoState) -> dict:
@@ -193,6 +209,12 @@ def generate_report(state: PersonInfoState) -> dict:
     numbers_block = format_for_prompt(state.get("numbers_zh") or {})
     if numbers_block:
         context_parts.append(numbers_block)
+        context_parts.append("")
+
+    from utils.premise_validate import format_for_prompt as format_validation
+    validation_block = format_validation(state.get("validation") or {})
+    if validation_block:
+        context_parts.append(validation_block)
         context_parts.append("")
 
     context = "\n".join(context_parts)
@@ -232,6 +254,11 @@ def generate_report(state: PersonInfoState) -> dict:
    - 禁用：「廣泛人脈」「深厚經驗」「業界領袖」 → 必須附具體公司、年數或職稱
    - 禁用：「持續發展」「不斷擴張」 → 必須給時間軸或具體里程碑
 9. **【結構化數字 echo 規則】**：若 context 內有「[結構化數字]」區塊，**該區塊的中文字串已是最終格式**，報告中提及對應金額 / 百分比 / 倍數時必須**逐字 echo**，禁止改寫數值、禁止重新做單位換算、禁止用「約」「大約」等模糊化前綴包裹（除非 evidence 本身就有這些字）
+10. **【前提驗證 / 覆蓋度規則】**：若 context 內有「[前提驗證 / 覆蓋度檢查]」區塊，該區塊已逐條標好 status，報告必須嚴格遵守：
+    - `[unverified]` 的 premise：**必須明寫**「任務指令所述『XXX』，本次搜尋資料無法驗證」這類句式；**禁止用沾邊但不直接對應的 evidence 撐起這條 premise**
+    - `[partial]` 的 premise：明寫確認的部分、明標未確認的部分
+    - `[missing]` 的 deliverable：**必須明寫**「資料不足，無法回答 X」；**禁止用「資深」「重要」「關鍵」等抽象詞替代具體答案**
+    - `[partial]` 的 deliverable：寫出找到的部分，明標未抓到的具體數值 / 名稱 / 日期
 {mode_rules}
 
 JSON 格式：
@@ -301,6 +328,8 @@ def format_output(state: PersonInfoState) -> dict:
         logger.add_search_result(entry["query"], entry["results"])
     if state.get("number_items"):
         logger.add_extracted_numbers(state["number_items"])
+    if state.get("validation"):
+        logger.add_validation(state["validation"])
     log_path = logger.save(output_path)
 
     return {"output_path": str(output_path), "log_path": str(log_path)}
@@ -316,6 +345,7 @@ def build_graph():
     graph.add_node("next_action",    next_action)
     graph.add_node("execute_search", execute_search)
     graph.add_node("extract_numbers", extract_numbers_node)
+    graph.add_node("verify",          verify_node)
     graph.add_node("generate_report", generate_report)
     graph.add_node("format_output",  format_output)
 
@@ -329,7 +359,8 @@ def build_graph():
     )
     graph.add_edge("next_action",     "execute_search")
     graph.add_edge("execute_search",  "evaluate")
-    graph.add_edge("extract_numbers", "generate_report")
+    graph.add_edge("extract_numbers", "verify")
+    graph.add_edge("verify",          "generate_report")
     graph.add_edge("generate_report", "format_output")
     graph.add_edge("format_output",  END)
 
@@ -360,6 +391,7 @@ def run(
         "search_results": [],
         "number_items": [],
         "numbers_zh": {},
+        "validation": {},
         "report": {},
         "output_path": "",
         "log_path": "",

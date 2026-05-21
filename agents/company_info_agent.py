@@ -54,6 +54,7 @@ class CompanyInfoState(TypedDict):
     sector_data: dict                      # FinanceDatabase sector scan result
     number_items: list[dict]               # raw Haiku echo from utils/number_extract (audit)
     numbers_zh: dict                       # {label: canonical Chinese string} for prompt
+    validation: dict                       # premise + deliverable check (utils/premise_validate)
     report: dict                           # {title, sections:[{heading,type,items|content}]}
     output_path: str
     log_path: str
@@ -376,6 +377,26 @@ def extract_numbers_node(state: CompanyInfoState) -> dict:
     return {"number_items": items, "numbers_zh": numbers_zh}
 
 
+# ── Node 2c: verify (premise + coverage check) ───────────────────────────────
+
+def verify_node(state: CompanyInfoState) -> dict:
+    """
+    Decompose instruction into premises (assertions) + deliverables (questions)
+    and stamp each with a status grounded in the evidence pool. The result is
+    injected into generate_report's context with hard rules forcing the
+    synthesizer to explicitly mark unverified premises and missing
+    deliverables — neutralizing the LLM's helpfulness-driven habit of
+    paraphrasing adjacent evidence to fill gaps (issues #7, #4, #19).
+    """
+    from utils.premise_validate import validate
+
+    validation = validate(
+        task_instruction=state["task_instruction"],
+        evidence=state.get("evidence", []),
+    )
+    return {"validation": validation}
+
+
 # ── Node 3: generate_report ───────────────────────────────────────────────────
 
 def generate_report(state: CompanyInfoState) -> dict:
@@ -414,6 +435,12 @@ def generate_report(state: CompanyInfoState) -> dict:
     numbers_block = format_for_prompt(state.get("numbers_zh") or {})
     if numbers_block:
         context_parts.append(numbers_block)
+        context_parts.append("")
+
+    from utils.premise_validate import format_for_prompt as format_validation
+    validation_block = format_validation(state.get("validation") or {})
+    if validation_block:
+        context_parts.append(validation_block)
         context_parts.append("")
 
     context = "\n".join(context_parts)
@@ -458,6 +485,12 @@ def generate_report(state: CompanyInfoState) -> dict:
    - 改寫數值（例如把「94 億美元」寫成「約 90 億美元」「9.4 億美元」「9,400 萬美元」）
    - 重新做單位換算（不要把 "$9.4 billion" 自己翻譯，直接用區塊裡的 "94 億美元"）
    - 用「約」「大約」「近」「逾」「超過」等模糊化前綴包裹（除非 evidence 本身就有這些字）
+10. **【前提驗證 / 覆蓋度規則】**：若 context 內有「[前提驗證 / 覆蓋度檢查]」區塊，該區塊已逐條標好 status，報告必須嚴格遵守：
+    - `[unverified]` 的 premise：**必須明寫**「任務指令所述『XXX』，本次搜尋資料無法驗證」這類句式；**禁止用沾邊但不直接對應的 evidence 撐起這條 premise**（例：instruction 說「政大校長介紹」，evidence 只提到「某董事畢業於政大」— 不可寫「介紹人可能與政大有淵源」這類迂迴回答，必須明寫無法驗證）
+    - `[partial]` 的 premise：明寫**確認的部分**、明標**未確認的部分**，不可遮掩
+    - `[missing]` 的 deliverable：**必須明寫**「資料不足，無法回答 X」；**禁止用「戰略佈局」「重要環節」「持續發展」等抽象詞替代具體答案**
+    - `[partial]` 的 deliverable：寫出找到的部分，明標未抓到的具體數值 / 名稱 / 日期
+    - 只有 `[confirmed]` premise 與 `[answered]` deliverable 可以正常陳述
 {mode_rules}
 
 JSON 格式：
@@ -540,6 +573,8 @@ def format_output(state: CompanyInfoState) -> dict:
         logger.add_sector_data(state["sector_data"])
     if state.get("number_items"):
         logger.add_extracted_numbers(state["number_items"])
+    if state.get("validation"):
+        logger.add_validation(state["validation"])
     log_path = logger.save(output_path)
 
     return {
@@ -563,6 +598,7 @@ def build_graph():
     graph.add_node("next_action",          next_action)      # ReAct: plan next query
     graph.add_node("execute_search",       execute_search)   # ReAct: run one query
     graph.add_node("extract_numbers",      extract_numbers_node)  # Haiku echo → Python convert
+    graph.add_node("verify",               verify_node)             # premise + coverage check
     graph.add_node("generate_report",      generate_report)
     graph.add_node("format_output",        format_output)
 
@@ -590,7 +626,8 @@ def build_graph():
     )
     graph.add_edge("next_action",     "execute_search")
     graph.add_edge("execute_search",  "evaluate")
-    graph.add_edge("extract_numbers", "generate_report")
+    graph.add_edge("extract_numbers", "verify")
+    graph.add_edge("verify",          "generate_report")
 
     # Final synthesis
     graph.add_edge("generate_report", "format_output")
@@ -639,6 +676,7 @@ def run(
         "sector_data": {},
         "number_items": [],
         "numbers_zh": {},
+        "validation": {},
         "report": {},
         "output_path": "",
         "log_path": "",
