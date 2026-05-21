@@ -39,7 +39,6 @@ import config
 AGENT_TYPES = {
     "company_info":    "公司/機構背景調查",
     "person_info":     "人物背景調查",
-    "sector_scan":     "結構化資料調查（產業 / 地區公司清單排名 + 多公司比較）",
     "translation":     "文章或文件翻譯",
     "letter":          "口述信件整理（音檔）",
     "meeting":         "會議記錄整理（音檔）",
@@ -148,11 +147,10 @@ def parse_tasks(
 - ✗ 拆開範例（錯誤）：「查英維克業務」+ 「查英維克財務」= 兩條（不可以）
 - ✓ 拆開範例（正確）：「查英維克」+「查林志明」= 兩條（不同對象）
 
-【sector_scan vs company_info 判斷】
-- sector_scan：對「N 家公司」做同欄位比較或排名。任務句型常含「前十大 / Top X / 列出 / 排名 / 比較 / 哪些公司」+「同產業／同地區」+「市值 / PE / 營收」這類數值維度
-- company_info：對「單一公司或機構」做研究，即使涉及財務數字也是該公司本身
-- 例子：「列出台灣前十大半導體公司並比較市值」→ sector_scan
-- 例子：「調查台積電的最新財報與 AI 客戶」→ company_info（單一公司）
+【公司研究一律走 company_info】
+- 不論單一公司或多家公司比較 / 排名（「前十大 / Top X / 列出 / 比較 / 哪些公司」），都用 company_info
+- 例子：「調查台積電的最新財報與 AI 客戶」→ company_info
+- 例子：「列出台灣前十大半導體公司並比較市值」→ company_info（一條，instruction 保留比較需求）
 
 範例輸出：
 [
@@ -160,11 +158,6 @@ def parse_tasks(
     "agent_type": "company_info",
     "label": "英維克 002837.SZ — 業務、財務、競爭",
     "instruction": "調查英維克 002837.SZ，涵蓋業務結構、財務表現與競爭優勢"
-  }},
-  {{
-    "agent_type": "sector_scan",
-    "label": "台灣半導體 Top 10（市值排名）",
-    "instruction": "列出台灣前十大半導體公司，比較市值、PE 與近三個月股價漲跌幅"
   }},
   {{
     "agent_type": "translation",

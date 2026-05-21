@@ -40,10 +40,6 @@ python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --pdf ~/Dow
 # 直接跑單一 agent
 python3.13 agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
 
-# 結構化資料調查（產業 / 地區 Top N + 多公司比較）
-python3.13 agents/sector_scan_agent.py --task "列出台灣前十大半導體公司，比較市值與 PE" --intern "Justin"
-python3.13 main.py --input "列出香港金融業前 20 家，按市值排序" --type sector_scan --intern "Justin"
-
 # Podcast agent 直接執行（--questions 用分號分隔，不是 JSON array）
 python3.13 agents/podcast_agent.py \
   --topic "全球媒體產業" \
@@ -95,7 +91,6 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 |---|---|---|
 | `company_info` | `agents/company_info_agent.py` | 公司/機構研究，10-node graph（含財務資料層 + ReAct loop） |
 | `person_info` | `agents/person_info_agent.py` | 人物背景，8-node ReAct loop graph |
-| `sector_scan` | `agents/sector_scan_agent.py` | 結構化資料調查（產業 + 地區 Top N + 多公司比較）；FDB enum 作前置 gate，不可行任務直接出 note doc |
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
@@ -120,17 +115,6 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 **company_info loop 控制**：`MAX_ROUNDS=6`（hard cap）；所有 todo 皆 done 或 unresolved 提前結束；連續 2 輪 0 結果（stall）強制結束
 
 **person_info**（9-node LangGraph，同 ReAct loop + numbers layer）：同 company_info，無財務資料層（無 check_financial_need / fetch_financial_data / fetch_sector_data）；`MAX_ROUNDS=5`
-
-**sector_scan**（4-node LangGraph，conditional edge）：
-1. `parse_request` — Haiku 拿 `get_fdb_enum()` 載入的 enum，做 feasibility 判斷 + 鎖定 `industry / country / top_n / rank_by / metrics`；defensive 二次驗證 Haiku 給的 industry 真的在 enum 內，否則自動翻 N
-2. conditional edge `_is_feasible` — Y → `fetch_companies`；N → `format_output` 出 note doc 建議走 `company_info` + Tavily fallback
-3. `fetch_companies` — `fetch_sector_scan(industry, country, limit=top_n*3)` over-fetch 3x 抗 yfinance miss
-4. `enrich_metrics` — 對每個 ticker 呼叫 yfinance（`_PER_TICKER_DELAY=1.5s`），按 `rank_by` 排序，截 `top_n`
-5. `format_output` — 摘要段 + Table Grid 表格；數值格式化（B for billions / x for PE / +%.2f% for change_3mo）
-
-**sector_scan 任務分類觸發**：planner Haiku 看到「前十大 / Top X / 列出 / 排名 / 比較 / 哪些公司」+「同產業／同地區」+「市值 / PE / 營收」即優先選 `sector_scan`；單一公司研究即使含財務數字仍走 `company_info`。
-
-**sector_scan 不可行的判斷**：FinanceDatabase 沒有對應分類的請求（如「AI 概念股」「重電股」「綠能新貴」「年終排名」），Haiku 設 `feasible=N`，graph 直接跳 `format_output` 出 note doc 建議 fallback。
 
 **speech_ppt**（4-node LangGraph）：
 1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
@@ -169,7 +153,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 **各 agent 的包裝方式**：每個 agent 定義 `_MAX_ROUNDS` 和 `_SEARCH_HINT` 常數，再用薄包裝函式呼叫 react_loop 的 public API，讓 LangGraph 拿到正確的 TypedDict 型別標注。新增同樣需要 ReAct loop 的 research agent 時直接 import 並包裝，不需修改 react_loop.py。
 
 ### router → agent 的 mode 傳遞規則
-- `company_info` / `person_info` / `dictation` / `sector_scan`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
+- `company_info` / `person_info` / `dictation`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
 - `podcast` / `speech_ppt` / `translation`：router 個別傳參，不走 `**kwargs`，不需要 `mode`
 - 新增走 `**kwargs` 路徑的 agent，`run()` 必須接受 `mode: str = "short"` 以免 TypeError
 
@@ -276,7 +260,6 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 - `agents/person_info_agent.py` parse_task / generate_report
 - `utils/react_loop.py` next_action / evaluate
 - `agents/podcast_agent.py` generate_queries
-- `agents/sector_scan_agent.py` parse_request
 
 新增有時間敏感性的 prompt 時務必加注入。
 
@@ -391,7 +374,7 @@ Financial / sector data 以結構化 JSON 注入 `generate_report` context；財
 - 其餘 fetcher 含 `as_of` = Asia/Taipei fetch 時間
 - `generate_report` prompt 強制：引用 yfinance 數字必附資料日期
 
-**FDB enum cache（`get_fdb_enum()`）**：一次性載入 FinanceDatabase 的 sector / industry_group / industry / country / exchange enum，cache 到 `utils/_fdb_enum.json`（committed for fresh-checkout convenience）。`sector_scan_agent` 用這個 cache 把 enum 列進 prompt，讓 Haiku 只能逐字選用，杜絕非法 industry 值。需要 refresh 時刪掉 JSON 即可。
+**FDB enum cache（`get_fdb_enum()`）**：一次性載入 FinanceDatabase 的 sector / industry_group / industry / country / exchange enum，cache 到 `utils/_fdb_enum.json`（committed for fresh-checkout convenience）。需要 refresh 時刪掉 JSON 即可。目前 `sector_scan` agent 移除後無 caller，保留供未來結構化掃描功能重用。
 
 **Data source self-declaring**：每個 fetcher 透過 `_tag_source()` 在成功 payload 加 `"_source": "yfinance"` 或 `"FinanceDatabase"`。`utils/logger.py` 讀每筆 payload 的 `_source`，動態產生 log label（例：`--- Financial Data (yfinance: stock_price, key_metrics) ---`），不再 hardcode。新增跨資料源 fetcher 時務必呼叫 `_tag_source()`。
 
