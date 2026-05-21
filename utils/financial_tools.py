@@ -58,9 +58,10 @@ def get_fdb_enum() -> dict:
     country / exchange values into a cached dict.
 
     Cached on disk at utils/_fdb_enum.json so subsequent calls are zero-cost.
-    Delete that file to refresh. Used by sector_scan agent so its prompt
-    can constrain Haiku to selecting from a fixed enum (no free-form input
-    that would produce illegal queries like industry='semiconductor company').
+    Delete that file to refresh. Used by company_info's Q3 sector-data layer
+    so its prompt can constrain Haiku to selecting from a fixed enum (no
+    free-form input that would produce illegal queries like
+    industry='semiconductor company').
     """
     global _FDB_ENUM_CACHE
     if _FDB_ENUM_CACHE is not None:

@@ -74,6 +74,25 @@ class PlanTask:
 
 # ── LLM parsing ───────────────────────────────────────────────────────────────
 
+def _extract_json_array(text: str):
+    """
+    Parse Haiku's task list, tolerating ```fences``` and trailing prose.
+
+    Haiku's common failure mode is a valid JSON array followed by an
+    explanation paragraph ("Extra data" on plain json.loads). raw_decode
+    parses the first complete value and ignores the trailing prose, so a
+    chatty-but-valid response no longer crashes the whole pipeline.
+
+    Raises json.JSONDecodeError if no parseable array is present.
+    """
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+    text = re.sub(r"\s*```$", "", text).strip()
+    idx = text.find("[")
+    if idx >= 0:
+        return json.JSONDecoder().raw_decode(text, idx)[0]
+    return json.loads(text)   # no array → raise with the original text
+
+
 def parse_tasks(
     raw_instruction: str,
     force_type: str = None,
@@ -174,17 +193,24 @@ def parse_tasks(
     )
 
     raw = message.content[0].text.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
     try:
-        data = json.loads(raw.strip())
+        data = _extract_json_array(raw)
     except json.JSONDecodeError as e:
         if message.stop_reason == "max_tokens":
             raise RuntimeError(
                 f"Planner Haiku 輸出被 max_tokens 截斷（{message.usage.output_tokens} tokens），"
                 f"請降低任務數量或進一步提高 max_tokens。原始錯誤：{e}"
             ) from e
-        raise
+        raise RuntimeError(
+            f"Planner Haiku 未回傳有效 JSON 任務清單（輸入可能無實質任務內容，"
+            f"如 STT 轉錄失敗）。原始回應前 200 字：{raw[:200]!r}"
+        ) from e
+
+    if not isinstance(data, list):
+        raise RuntimeError(
+            f"Planner Haiku 回傳的不是任務陣列（type={type(data).__name__}）。"
+            f"原始回應前 200 字：{raw[:200]!r}"
+        )
 
     return [
         PlanTask(
