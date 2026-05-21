@@ -8,3 +8,4 @@ python-dotenv==1.2.2
 tavily-python==0.7.23
 yfinance>=0.2.54
 financedatabase>=2.2.0
+opencc>=1.1.6

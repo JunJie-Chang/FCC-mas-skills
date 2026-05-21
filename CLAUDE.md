@@ -11,6 +11,7 @@ CY（老闆）口述指令 → STT → Planner → 確認 → Agents → Word �
 - `.venv` 存在但未使用（packages 裝在 system Python）
 - `.env` 有 `ANTHROPIC_API_KEY`、`TAVILY_API_KEY`、`OPENAI_API_KEY`
 - **重要**：所有 `load_dotenv()` 必須用 `override=True`，否則 shell 中已有空字串的 env var 會擋住 `.env` 的值
+- **系統依賴**：`ffmpeg` / `ffprobe`（STT 對 >4 分鐘音檔切片用，見 `utils/stt.py`）；未安裝時長音檔轉錄會失敗（`brew install ffmpeg`）
 
 ## CLI Usage
 ```bash
@@ -63,7 +64,7 @@ python3.13 main.py --audio recording.m4a --type speech_ppt --intern "Justin"
 - Anthropic Claude：`LLM_MAIN = claude-opus-4-6`，`LLM_FAST = claude-haiku-4-5-20251001`
 - Tavily（web search）
 - yfinance + FinanceDatabase（財務資料，`utils/financial_tools.py`）
-- OpenAI Whisper（STT，透過 `utils/stt.py`）
+- OpenAI gpt-4o-transcribe（STT，透過 `utils/stt.py`；LLM-backed ASR，中文同音專有名詞辨識優於舊版 whisper-1）
 - python-docx（Word 輸出，透過 `formatters/word_formatter.py`）
 
 ## Architecture
