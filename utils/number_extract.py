@@ -160,6 +160,8 @@ def extract_numbers(
    英文 "$9.4 billion"                  → value=9.4,  scale="billion"
    英文 "$1.5 trillion"                 → value=1.5,  scale="trillion"
    英文 "$500 million"                  → value=500,  scale="million"
+   財報「NT$99,864,187 thousand」        → value=99864187, scale="thousand"  ← 財報「仟元」慣例
+   財報「in thousands」/「仟元」單位      → scale="thousand"                  ← 同上
    中文「9.4 億美元」「140 億新台幣」    → scale="hundred_million"   ← 中文「億」
    中文「8.67 亿元」「34.25 亿元」       → scale="hundred_million"   ← 簡體「亿」也是
    中文「1.5 兆人民幣」「5.2 兆新台幣」  → scale="trillion"           ← 中文「兆」
@@ -167,6 +169,12 @@ def extract_numbers(
    中文純數字「2,510 億」（無幣別）      → value=2510, scale="hundred_million", currency=null
    百分比「46%」「年增 56.52%」          → scale="percent", currency=null
    倍數「3.8 倍」「1.5x」                → scale="ratio",   currency=null
+
+   ⚠ 台股 / 港股財報（年報、季報、損益表、資產負債表、現金流量表）一律以
+   「仟元」/「in thousands」/「NT$ thousands」為單位。看到數字後綴 thousand、
+   或表頭標明 in thousands / 仟元，**必須 echo scale="thousand"**，絕對不可
+   當成 plain。把「NT$99,864,187 thousand」echo 成 scale="plain" 會被下游算
+   成「9,986 萬」（正解是 998.6 億），這是與 #8 / #16 同源的 1000× 漏算 bug。
 
 2. **絕對禁止：把中文「億」echo 成 scale="billion"**
    中文「億」= 1e8，英文 billion = 1e9，差 10 倍。把中文「140 億」echo 成 scale="billion" 會被下游算成「1,400 億」，這是 issue #16 的根因。

@@ -140,6 +140,12 @@ if __name__ == "__main__":
         # 「萬」
         ((1.4,    "ten_thousand",    ""),    "1.4 萬"),
         ((934.26, "ten_thousand",    ""),    "934.26 萬"),
+        # 財報「仟元」/「in thousands」 — scale="thousand" (issue: 1000× under-count
+        # when Haiku echoed台股財報「NT$X thousand」as scale="plain"). UMC FY2025 actuals:
+        ((99864187,  "thousand", "TWD"), "998.64 億新台幣"),    # 營運現金流
+        ((110660052, "thousand", "TWD"), "1106.6 億新台幣"),    # 年底現金及約當現金
+        ((237553199, "thousand", "TWD"), "2375.53 億新台幣"),   # 合併營收
+        ((1000,      "thousand", "USD"), "100 萬美元"),         # 邊界：1,000 仟 = 1M
         # 智伸科 capex case (was: '6 billion' echoed wrong → '60 億人民幣')
         # Correct echo: 中文 "6 億新台幣" → scale="hundred_million", currency="TWD"
         ((6,      "hundred_million", "TWD"), "6 億新台幣"),
