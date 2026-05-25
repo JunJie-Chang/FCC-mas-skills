@@ -25,8 +25,9 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
-  AlertCircle, ImageOff, ImagePlus, Loader2, Plus, Send, Trash2,
+  AlertCircle, ImageOff, ImagePlus, Plus, Send, Trash2,
 } from "lucide-react"
+import { ConfirmSubmitDialog } from "@/components/ConfirmSubmitDialog"
 
 const DALLE_PER_IMAGE_USD = 0.04
 
@@ -87,24 +88,38 @@ export function NewSpeechPPTPage() {
 
   const generateImages = watch("generate_images")
   const slides = watch("slides")
+  const topic = watch("topic")
+  const internName = watch("intern_name")
   const nSlides = slides.length
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
-  const onSubmit = handleSubmit(async (v) => {
+  const openConfirm = handleSubmit(() => {
     setSubmitError(null)
-    const instruction = formatInstruction(v)
+    setConfirmOpen(true)
+  })
+
+  const actuallySubmit = async () => {
+    setSubmitError(null)
+    const instruction = formatInstruction({
+      topic, intern_name: internName,
+      generate_images: generateImages,
+      slides,
+    } as FormValues)
     try {
       const job = await create.mutateAsync({
         type:        "speech_ppt",
         instruction,
-        intern_name: v.intern_name,
+        intern_name: internName,
         mode:        "short",
-        extra:       { generate_images: v.generate_images },
+        extra:       { generate_images: generateImages },
       })
+      setConfirmOpen(false)
       navigate({ to: "/jobs/$jobId", params: { jobId: job.id } })
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : String(e))
+      setConfirmOpen(false)
     }
-  })
+  }
 
   return (
     <div className="space-y-6">
@@ -123,7 +138,7 @@ export function NewSpeechPPTPage() {
         </Alert>
       )}
 
-      <form onSubmit={onSubmit} className="space-y-6">
+      <form onSubmit={openConfirm} className="space-y-6">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">演講主題（選填）</CardTitle>
@@ -255,14 +270,58 @@ export function NewSpeechPPTPage() {
 
         <div className="flex justify-end">
           <Button type="submit" variant="accent" size="lg" disabled={create.isPending}>
-            {create.isPending ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> 送出中…</>
-            ) : (
-              <><Send className="h-4 w-4" /> 送出投影片任務</>
-            )}
+            <Send className="h-4 w-4" />
+            預覽送出內容
           </Button>
         </div>
       </form>
+
+      <ConfirmSubmitDialog
+        open={confirmOpen}
+        title="送出演講 PPT 任務前確認"
+        description={
+          generateImages
+            ? "DALL-E 圖片會在 confirm_slides 模態框二次確認時才實際扣款，但 LLM parse 跟 build_ppt 是立刻燒的。"
+            : "本次跳過 DALL-E；只會生成 PPT 結構 + bullets。"
+        }
+        estimatedCost={
+          generateImages
+            ? `預估 DALL-E 上限：${nSlides} 張 × $0.04 = $${(nSlides * DALLE_PER_IMAGE_USD).toFixed(2)}（投影片預覽 modal 還可取消）`
+            : undefined
+        }
+        submitting={create.isPending}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={actuallySubmit}
+        summary={
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div className="col-span-2">
+                <div className="text-xs text-[var(--color-muted-fg)] mb-0.5">主題</div>
+                <div>{topic || <span className="text-[var(--color-muted-fg)]">（留空，agent 自動推論）</span>}</div>
+              </div>
+              <div>
+                <div className="text-xs text-[var(--color-muted-fg)] mb-0.5">實習生</div>
+                <div>{internName}</div>
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-[var(--color-muted-fg)] mb-1">
+                投影片（{nSlides}）
+              </div>
+              <ol className="list-decimal pl-5 space-y-1.5 text-sm">
+                {slides.map((s, i) => (
+                  <li key={i}>
+                    <div className="font-medium break-words">{s.title || <em className="text-[var(--color-muted-fg)]">（未填標題）</em>}</div>
+                    <div className="text-xs text-[var(--color-muted-fg)] whitespace-pre-wrap break-words">
+                      {s.content}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </div>
+          </div>
+        }
+      />
     </div>
   )
 }

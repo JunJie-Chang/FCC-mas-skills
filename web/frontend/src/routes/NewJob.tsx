@@ -11,7 +11,8 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { Loader2, Send, AlertCircle } from "lucide-react"
+import { Send, AlertCircle } from "lucide-react"
+import { ConfirmSubmitDialog } from "@/components/ConfirmSubmitDialog"
 import { useState } from "react"
 
 const schema = z.object({
@@ -43,6 +44,7 @@ export function NewJobPage() {
   const create = useCreateJob()
   const navigate = useNavigate()
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -56,22 +58,32 @@ export function NewJobPage() {
   const { register, handleSubmit, watch, setValue, formState: { errors } } = form
   const selectedType = watch("type")
   const instruction = watch("instruction")
+  const internName = watch("intern_name")
+  const mode = watch("mode")
+  const typeLabel = TYPES.find((t) => t.value === selectedType)?.label ?? selectedType
 
-  const onSubmit = handleSubmit(async (values) => {
+  const openConfirm = handleSubmit(() => {
+    setSubmitError(null)
+    setConfirmOpen(true)
+  })
+
+  const actuallySubmit = async () => {
     setSubmitError(null)
     try {
       const job = await create.mutateAsync({
-        type:        values.type,
-        instruction: values.instruction,
-        intern_name: values.intern_name,
-        mode:        values.mode,
+        type:        selectedType,
+        instruction,
+        intern_name: internName,
+        mode,
         extra:       {},
       })
+      setConfirmOpen(false)
       navigate({ to: "/jobs/$jobId", params: { jobId: job.id } })
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : "未知錯誤")
+      setConfirmOpen(false)
     }
-  })
+  }
 
   return (
     <div className="space-y-6">
@@ -90,7 +102,7 @@ export function NewJobPage() {
         </Alert>
       )}
 
-      <form onSubmit={onSubmit} className="space-y-6">
+      <form onSubmit={openConfirm} className="space-y-6">
         {/* Type picker */}
         <Card>
           <CardHeader>
@@ -193,14 +205,44 @@ export function NewJobPage() {
         {/* Submit */}
         <div className="flex justify-end gap-3">
           <Button type="submit" variant="accent" size="lg" disabled={create.isPending}>
-            {create.isPending ? (
-              <><Loader2 className="h-4 w-4 animate-spin" /> 送出中…</>
-            ) : (
-              <><Send className="h-4 w-4" /> 送出任務</>
-            )}
+            <Send className="h-4 w-4" />
+            預覽送出內容
           </Button>
         </div>
       </form>
+
+      <ConfirmSubmitDialog
+        open={confirmOpen}
+        title="送出前確認"
+        description="agent 啟動後會立即燒 API 額度。最後檢查一下類型跟指令對不對。"
+        submitting={create.isPending}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={actuallySubmit}
+        summary={
+          <div className="space-y-3">
+            <div className="grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <div className="text-xs text-[var(--color-muted-fg)] mb-0.5">類型</div>
+                <div>{typeLabel}</div>
+              </div>
+              <div>
+                <div className="text-xs text-[var(--color-muted-fg)] mb-0.5">模式</div>
+                <div>{mode === "short" ? "Short（約兩頁）" : "Medium（延伸分析）"}</div>
+              </div>
+              <div>
+                <div className="text-xs text-[var(--color-muted-fg)] mb-0.5">實習生</div>
+                <div>{internName}</div>
+              </div>
+            </div>
+            <div>
+              <div className="text-xs text-[var(--color-muted-fg)] mb-1">指令</div>
+              <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/30 p-3 text-sm whitespace-pre-wrap break-words max-h-60 overflow-auto">
+                {instruction}
+              </div>
+            </div>
+          </div>
+        }
+      />
     </div>
   )
 }

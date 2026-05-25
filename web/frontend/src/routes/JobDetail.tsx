@@ -1,5 +1,5 @@
 import { useParams } from "@tanstack/react-router"
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { format } from "date-fns"
 import { useJob, useInvalidateJob } from "@/api/hooks"
 import { useJobEvents, type JobEvent } from "@/api/useJobEvents"
@@ -12,7 +12,7 @@ import { CheckpointGate } from "@/components/checkpoints/CheckpointGate"
 import { SubTaskList } from "@/components/SubTaskList"
 import { useQueryClient } from "@tanstack/react-query"
 import {
-  AlertCircle, CheckCircle2, Clock, Download, FileText, Loader2,
+  AlertCircle, Ban, CheckCircle2, Clock, Download, FileText, Loader2,
   XCircle, Radio, PauseCircle,
 } from "lucide-react"
 
@@ -66,6 +66,21 @@ export function JobDetailPage() {
     a.download = filename
     a.click()
     URL.revokeObjectURL(url)
+  }
+
+  const [cancelling, setCancelling] = useState(false)
+  const handleCancel = async () => {
+    if (!jobId) return
+    if (!window.confirm("確定取消這個任務？已產出的成本不會退款，但會立即停止後續執行。")) return
+    setCancelling(true)
+    try {
+      await api.cancelJob(jobId)
+      invalidate(jobId)
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : String(e))
+    } finally {
+      setCancelling(false)
+    }
   }
 
   if (isLoading) {
@@ -136,6 +151,30 @@ export function JobDetailPage() {
             </div>
           </div>
         </CardHeader>
+        {/* Cancel button — only while a non-terminal status (queued /
+            running / needs_*) lets the user pull the plug if the agent
+            went off the rails. Soft cancel: backend resolves any open
+            checkpoint future + sets status=CANCELLED; an actively
+            running node finishes the call it's mid-flight on. */}
+        {!TERMINAL.includes(job.status) && (
+          <CardContent className="border-t border-[var(--color-border)] pt-4 flex flex-wrap gap-3">
+            <Button
+              variant="outline"
+              onClick={handleCancel}
+              disabled={cancelling}
+              className="border-[var(--color-destructive)]/40 text-[var(--color-destructive)] hover:bg-[var(--color-destructive)]/10"
+            >
+              {cancelling ? (
+                <><Loader2 className="h-4 w-4 animate-spin" /> 取消中…</>
+              ) : (
+                <><Ban className="h-4 w-4" /> 取消任務</>
+              )}
+            </Button>
+            <span className="text-xs text-[var(--color-muted-fg)] self-center">
+              已產出的成本 (${job.cost_usd.toFixed(4)}) 不會退款；節點執行中可能會跑完當前一步才停。
+            </span>
+          </CardContent>
+        )}
         {/* Parent download / log only when the parent itself has a file.
             stt_pipeline parents return output_path="" — their deliverables
             live on the sub-task cards, so the parent's action bar would
