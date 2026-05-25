@@ -32,10 +32,10 @@ type FormValues = z.infer<typeof schema>
 const TYPES: { value: AgentType; label: string; description: string; enabled: boolean; note?: string }[] = [
   { value: "company_info",   label: "公司研究",   description: "業務 / 財務 / 競爭定位",     enabled: true },
   { value: "person_info",    label: "人物背景",   description: "公司關係 / 履歷 / 背景",     enabled: true },
-  { value: "podcast",        label: "Podcast",   description: "主題 + 多問題研究",         enabled: true },
   { value: "meeting",        label: "會議紀錄",   description: "口述會議整理（letter 共用）", enabled: true },
   { value: "verbal_cleanup", label: "口述清稿",   description: "去除廢話、整理書面稿",       enabled: true },
-  { value: "speech_ppt",     label: "演講 PPT",  description: "結構化頁 + DALL-E 圖片",    enabled: true },
+  { value: "podcast",        label: "Podcast",   description: "主題 + 多問題研究",         enabled: false, note: "請走「Podcast 任務」頁面" },
+  { value: "speech_ppt",     label: "演講 PPT",  description: "結構化頁 + DALL-E 圖片",    enabled: false, note: "請走「演講 PPT 任務」頁面" },
   { value: "translation",    label: "翻譯",       description: "外文文章中譯（含 title / 來源欄位）", enabled: false, note: "請走「翻譯任務」頁面" },
 ]
 

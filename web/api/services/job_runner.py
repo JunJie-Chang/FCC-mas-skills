@@ -49,6 +49,39 @@ def _new_subtask_id() -> str:
     return uuid.uuid4().hex
 
 
+def _friendly_stt_error(exc: Exception, audio_path: str) -> RuntimeError:
+    """
+    Translate raw OpenAI / ffmpeg exceptions from utils.stt into an
+    actionable Chinese message. The original exception's __cause__ is
+    preserved so the .log sidecar / server logs still have the full
+    traceback for debugging.
+    """
+    raw = str(exc)
+    ext = audio_path.rsplit(".", 1)[-1].lower() if "." in audio_path else ""
+    lower = raw.lower()
+
+    if "unsupported file format" in lower or "invalid_request_error" in lower:
+        return RuntimeError(
+            f"OpenAI STT 不支援的音檔格式（.{ext}）。請改用 m4a / mp3 / mp4 / wav / webm。"
+            f"原始錯誤：{raw[:200]}"
+        )
+    if "rate limit" in lower or "429" in lower:
+        return RuntimeError(
+            "OpenAI / Anthropic 速率限制 — 稍候再試。原始錯誤：" + raw[:200]
+        )
+    if "ffmpeg" in lower or "ffprobe" in lower:
+        return RuntimeError(
+            "音檔處理失敗（ffmpeg / ffprobe 出錯）。"
+            "確認檔案沒有損壞，或試著重新轉檔。原始錯誤：" + raw[:200]
+        )
+    if "no such file" in lower or "filenotfound" in lower:
+        return RuntimeError(
+            "找不到上傳的音檔（可能被清掉）。請重新上傳。"
+        )
+    # Generic fallback — still better than a bare BadRequestError.
+    return RuntimeError(f"STT 轉錄失敗：{raw[:300]}")
+
+
 # ── Single-agent dispatch ───────────────────────────────────────────
 
 def _dispatch_blocking(
@@ -163,7 +196,7 @@ def _run_stt_pipeline(
     """
     upload_id = extra.get("upload_id")
     if not upload_id:
-        raise ValueError("stt_pipeline requires extra.upload_id")
+        raise ValueError("stt_pipeline 需要 extra.upload_id（請從 /new-audio 頁面上傳音檔）")
 
     audio_path = _resolve_upload_path(upload_id)
 
@@ -174,9 +207,13 @@ def _run_stt_pipeline(
     from utils.planner import parse_tasks, confirm
     from router import dispatch as router_dispatch
 
-    # 1. STT
+    # 1. STT — wrap with user-friendly error mapping so a doomed
+    # transcription doesn't dump a raw OpenAI exception into Job.error.
     progress_cb({"kind": "stt_started", "ts": _utcnow().isoformat()})
-    transcript = transcribe(audio_path)
+    try:
+        transcript = transcribe(audio_path)
+    except Exception as exc:
+        raise _friendly_stt_error(exc, audio_path) from exc
     progress_cb({
         "kind": "stt_completed",
         "ts": _utcnow().isoformat(),

@@ -34,14 +34,25 @@ from web.api.schemas import UploadResponse
 log = logging.getLogger("routes.uploads")
 router = APIRouter(prefix="/uploads", tags=["uploads"])
 
-# Audio formats STT (utils/stt.py via gpt-4o-transcribe) can handle.
-# ffmpeg slices anything >4 min so as long as ffmpeg can read it, we
-# accept. Conservative list — extending is one line.
+# Audio formats accepted end-to-end by OpenAI gpt-4o-transcribe.
+# Anything outside this list either fails inside STT or would need a
+# pre-pass ffmpeg conversion we don't currently do — better to reject
+# at the door with a clear message than to take a doomed upload.
 _ALLOWED_AUDIO_EXTS = {
-    ".m4a", ".mp3", ".wav", ".aiff", ".aif",
-    ".webm", ".ogg", ".oga", ".opus", ".flac",
+    ".m4a", ".mp3", ".mp4", ".wav", ".webm",
+}
+# Common formats users WILL try but that aren't accepted — used to
+# surface "convert via ffmpeg" guidance instead of a generic 415.
+_KNOWN_REJECT_EXTS = {
+    ".aiff", ".aif", ".opus", ".ogg", ".oga", ".flac",
+    ".caf",      # macOS QuickTime native
+    ".wma",
 }
 _MAX_BYTES = 100 * 1024 * 1024   # 100 MB
+_FFMPEG_HINT = (
+    "可用 ffmpeg 轉檔："
+    "ffmpeg -i input.<舊副檔名> -c:a aac -b:a 64k output.m4a"
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _UPLOAD_ROOT = _REPO_ROOT / "web" / "api" / "uploads"
@@ -67,13 +78,27 @@ async def upload_audio(
     memory — handles 100 MB files without RAM pressure.
     """
     if not file.filename:
-        raise HTTPException(status_code=400, detail="filename required")
+        raise HTTPException(status_code=400, detail="檔名缺失，請重新上傳")
 
     ext = _ext_or_none(file.filename)
-    if ext is None or ext not in _ALLOWED_AUDIO_EXTS:
+    if ext is None:
         raise HTTPException(
             status_code=415,
-            detail=f"unsupported audio format {ext!r}; allowed: {sorted(_ALLOWED_AUDIO_EXTS)}",
+            detail=f"檔案 {file.filename!r} 沒有副檔名，無法判斷格式",
+        )
+    if ext not in _ALLOWED_AUDIO_EXTS:
+        allowed = " / ".join(sorted(_ALLOWED_AUDIO_EXTS))
+        if ext in _KNOWN_REJECT_EXTS:
+            raise HTTPException(
+                status_code=415,
+                detail=(
+                    f"OpenAI STT 不接受 {ext} 格式。"
+                    f"支援格式：{allowed}。{_FFMPEG_HINT}"
+                ),
+            )
+        raise HTTPException(
+            status_code=415,
+            detail=f"不支援的副檔名 {ext}。支援格式：{allowed}",
         )
 
     # Phase 1+ : single user, "local" placeholder. Phase 7 wires real
@@ -102,7 +127,10 @@ async def upload_audio(
                     target.unlink(missing_ok=True)
                     raise HTTPException(
                         status_code=413,
-                        detail=f"upload exceeds {_MAX_BYTES // (1024*1024)} MB cap",
+                        detail=(
+                            f"檔案超過 {_MAX_BYTES // (1024*1024)} MB 上限。"
+                            f"建議降低位元率（ffmpeg -b:a 64k）或切分音檔。"
+                        ),
                     )
                 fh.write(chunk)
     except HTTPException:
@@ -110,7 +138,10 @@ async def upload_audio(
     except Exception as exc:
         log.exception("upload failed for %s", file.filename)
         target.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"upload failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail=f"上傳失敗（伺服器內部錯誤）：{exc}",
+        ) from exc
 
     mime = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
 

@@ -24,7 +24,20 @@ import {
   AlertCircle, FileAudio, Loader2, Upload, X,
 } from "lucide-react"
 
-const ACCEPTED_EXTS = [".m4a", ".mp3", ".wav", ".aiff", ".webm", ".ogg", ".opus", ".flac"]
+// OpenAI gpt-4o-transcribe accepts these; the backend's allow-list
+// matches. Keep them in sync.
+const ACCEPTED_EXTS = [".m4a", ".mp3", ".mp4", ".wav", ".webm"]
+// Formats users WILL try but that OpenAI rejects — we explicitly call
+// them out with a conversion hint instead of a generic "wrong format".
+const KNOWN_REJECT_EXTS: Record<string, string> = {
+  ".aiff": "AIFF (macOS say 預設輸出)",
+  ".aif":  "AIFF (macOS say 預設輸出)",
+  ".opus": "Opus",
+  ".ogg":  "OGG Vorbis",
+  ".flac": "FLAC",
+  ".caf":  "Core Audio Format (iOS QuickTime)",
+  ".wma":  "Windows Media Audio",
+}
 const MAX_BYTES = 100 * 1024 * 1024
 
 function formatBytes(b: number): string {
@@ -33,9 +46,9 @@ function formatBytes(b: number): string {
   return `${(b / 1024 / 1024).toFixed(1)} MB`
 }
 
-function hasAllowedExt(name: string): boolean {
-  const lower = name.toLowerCase()
-  return ACCEPTED_EXTS.some((ext) => lower.endsWith(ext))
+function extOf(name: string): string {
+  const m = name.toLowerCase().match(/\.[a-z0-9]+$/)
+  return m ? m[0] : ""
 }
 
 export function NewAudioPage() {
@@ -54,14 +67,35 @@ export function NewAudioPage() {
   const inputRef = useRef<HTMLInputElement>(null)
 
   const acceptFile = (f: File) => {
-    if (!hasAllowedExt(f.name)) {
-      setError(`不支援的格式：${f.name}。允許副檔名：${ACCEPTED_EXTS.join(" ")}`)
+    const ext = extOf(f.name)
+
+    // Format check FIRST so a 100 MB AIFF doesn't get past the size
+    // check just to fail later on the wrong reason.
+    if (!ext) {
+      setError(`檔案 "${f.name}" 沒有副檔名，無法判斷格式。`)
       return
     }
+    if (KNOWN_REJECT_EXTS[ext]) {
+      setError(
+        `${KNOWN_REJECT_EXTS[ext]} (${ext}) 不被 OpenAI STT 接受。` +
+        `請先轉檔成 m4a / mp3 / wav。` +
+        `指令範例：ffmpeg -i input${ext} -c:a aac -b:a 64k output.m4a`,
+      )
+      return
+    }
+    if (!ACCEPTED_EXTS.includes(ext)) {
+      setError(`不支援的副檔名 ${ext}。支援格式：${ACCEPTED_EXTS.join(" / ")}`)
+      return
+    }
+
     if (f.size > MAX_BYTES) {
-      setError(`檔案過大：${formatBytes(f.size)}（上限 100 MB）`)
+      setError(
+        `檔案過大：${formatBytes(f.size)}（上限 ${MAX_BYTES / (1024 * 1024)} MB）。` +
+        `可降位元率：ffmpeg -i input.m4a -b:a 64k -c:a aac smaller.m4a`,
+      )
       return
     }
+
     setError(null)
     setFile(f)
     setUpload(null)
@@ -114,8 +148,8 @@ export function NewAudioPage() {
       {error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertTitle>錯誤</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertTitle>無法處理這個檔案</AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
         </Alert>
       )}
 
@@ -124,6 +158,7 @@ export function NewAudioPage() {
           <CardTitle className="text-base">1. 上傳音檔</CardTitle>
           <CardDescription>
             支援 {ACCEPTED_EXTS.join(" / ")}．單檔上限 100 MB．
+            AIFF / Opus / FLAC 等非 OpenAI 支援格式請先轉檔（前端會擋下並提示）．
             超過 4 分鐘的錄音由 ffmpeg 自動切片。
           </CardDescription>
         </CardHeader>

@@ -89,6 +89,11 @@ export function JobDetailPage() {
     ? (new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000
     : null
 
+  // Translation stores its structured payload as a JSON-encoded
+  // instruction (router unpacks it server-side). Don't dump the raw
+  // JSON in the title — show the actual article title + source.
+  const { title, subtitle } = displayHeading(job.type, job.instruction)
+
   return (
     <div className="space-y-6">
       <CheckpointGate job={job} events={events} />
@@ -110,7 +115,12 @@ export function JobDetailPage() {
                   </Badge>
                 )}
               </div>
-              <CardTitle className="text-xl break-words">{job.instruction}</CardTitle>
+              <CardTitle className="text-xl break-words">{title}</CardTitle>
+              {subtitle && (
+                <div className="text-sm text-[var(--color-muted-fg)] break-words">
+                  {subtitle}
+                </div>
+              )}
               <div className="text-xs text-[var(--color-muted-fg)] flex flex-wrap gap-x-4 gap-y-1">
                 <span>建立於 {format(new Date(job.created_at), "yyyy-MM-dd HH:mm:ss")}</span>
                 <span>實習生：{job.intern_name}</span>
@@ -126,32 +136,35 @@ export function JobDetailPage() {
             </div>
           </div>
         </CardHeader>
-        {job.status === "done" && (
+        {/* Parent download / log only when the parent itself has a file.
+            stt_pipeline parents return output_path="" — their deliverables
+            live on the sub-task cards, so the parent's action bar would
+            point nowhere. Single-agent jobs always have output_path set
+            on success. */}
+        {job.status === "done" && job.output_path && (
           <CardContent className="border-t border-[var(--color-border)] pt-4 flex flex-wrap gap-3">
             <Button onClick={handleDownload} variant="accent">
               <Download className="h-4 w-4" />
               下載 .docx
             </Button>
-            <a
-              href={`/api/jobs/${job.id}/log`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex"
-            >
-              <Button variant="outline">
-                <FileText className="h-4 w-4" />
-                檢視 .log
-              </Button>
-            </a>
+            {job.log_path && (
+              <a
+                href={`/api/jobs/${job.id}/log`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex"
+              >
+                <Button variant="outline">
+                  <FileText className="h-4 w-4" />
+                  檢視 .log
+                </Button>
+              </a>
+            )}
           </CardContent>
         )}
         {job.status === "failed" && job.error && (
           <CardContent className="border-t border-[var(--color-border)] pt-4">
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>執行失敗</AlertTitle>
-              <AlertDescription className="font-mono text-xs">{job.error}</AlertDescription>
-            </Alert>
+            <FailureAlert error={job.error} />
           </CardContent>
         )}
       </Card>
@@ -293,4 +306,88 @@ function summarize(e: JobEvent): string {
       return Object.keys(rest).length === 0 ? "" : JSON.stringify(rest)
     }
   }
+}
+
+/**
+ * Per-type header text. Most agent types store a plain-text instruction
+ * we can show directly; translation stores a JSON envelope that needs
+ * unpacking so the user sees the actual article title rather than the
+ * literal {"title":"...","source":"..."} string.
+ *
+ * Returns { title, subtitle? } — title goes in the big heading,
+ * subtitle (when present) appears just below it in muted text.
+ */
+function displayHeading(
+  jobType: string,
+  instruction: string,
+): { title: string; subtitle?: string } {
+  if (jobType === "translation") {
+    try {
+      const parsed = JSON.parse(instruction) as {
+        title?: string
+        source?: string
+        pub_date?: string
+      }
+      if (parsed && typeof parsed.title === "string") {
+        const subBits: string[] = []
+        if (parsed.source) subBits.push(parsed.source)
+        if (parsed.pub_date) subBits.push(parsed.pub_date)
+        return {
+          title:    parsed.title,
+          subtitle: subBits.length > 0 ? subBits.join(" · ") : undefined,
+        }
+      }
+    } catch {
+      /* fall through to raw display */
+    }
+  }
+  return { title: instruction || "(無指令)" }
+}
+
+/**
+ * Friendly failure renderer. Most agent failures are one of a small
+ * set of patterns (Tavily quota, Anthropic rate limit, STT format,
+ * upload missing). Pattern-match on the error string and surface a
+ * hint alongside the raw message so the operator knows where to
+ * start. Raw message stays visible — never hidden.
+ */
+function FailureAlert({ error }: { error: string }) {
+  const hint = ((): string | null => {
+    const e = error.toLowerCase()
+    if (e.includes("rate") && (e.includes("limit") || e.includes("429"))) {
+      return "Anthropic / Tavily 速率限制。等 1–2 分鐘再重新送出；或檢查 .env 是否還在 free tier 額度內。"
+    }
+    if (e.includes("stt") && (e.includes("不支援") || e.includes("unsupported"))) {
+      return "音檔格式 OpenAI 不認。請從 /new-audio 重新上傳 m4a / mp3 / mp4 / wav / webm。"
+    }
+    if (e.includes("找不到上傳") || e.includes("filenotfound") || e.includes("no such file")) {
+      return "上傳檔案在伺服器上找不到（可能被清掉或路徑改變）。請重新上傳。"
+    }
+    if (e.includes("ticker") && e.includes("not found")) {
+      return "Ticker 解析失敗 — 任務指令可能拼錯公司名，或公司未上市。"
+    }
+    if (e.includes("badrequest") || e.includes("400")) {
+      return "上游 API 拒絕請求。多半是 prompt 過長或格式不對；看 .log 詳情。"
+    }
+    if (e.includes("timeout") || e.includes("timed out")) {
+      return "操作逾時。可能是網路或上游 API 慢；直接重試。"
+    }
+    return null
+  })()
+
+  return (
+    <Alert variant="destructive">
+      <AlertCircle className="h-4 w-4" />
+      <AlertTitle>執行失敗</AlertTitle>
+      <AlertDescription className="space-y-2">
+        <div className="font-mono text-xs break-all whitespace-pre-wrap">{error}</div>
+        {hint && (
+          <div className="text-xs">
+            <span className="font-semibold">可能原因：</span>
+            {hint}
+          </div>
+        )}
+      </AlertDescription>
+    </Alert>
+  )
 }
