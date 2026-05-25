@@ -25,8 +25,8 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from web.api.db import get_session
-from web.api.models import Job, JobEvent, JobStatus
-from web.api.schemas import JobCreateRequest, JobResponse
+from web.api.models import Job, JobEvent, JobStatus, JobSubTask
+from web.api.schemas import JobCreateRequest, JobResponse, JobSubTaskResponse
 from web.api.services.confirm_bus import confirm_bus
 from web.api.services.job_runner import execute_job
 from web.api.services.progress_bus import bus
@@ -191,6 +191,61 @@ def download_output(job_id: str, db: Session = Depends(get_session)) -> FileResp
         media_type=media_type,
         filename=path.name,
     )
+
+
+@router.get("/{job_id}/subtasks", response_model=list[JobSubTaskResponse])
+def list_subtasks(job_id: str, db: Session = Depends(get_session)) -> list[JobSubTask]:
+    """
+    List all sub-tasks of an stt_pipeline parent job, ordered by `idx`.
+    Returns [] for jobs that aren't stt_pipeline.
+    """
+    if db.get(Job, job_id) is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    rows = (
+        db.query(JobSubTask)
+        .filter(JobSubTask.parent_id == job_id)
+        .order_by(JobSubTask.idx.asc())
+        .all()
+    )
+    return rows
+
+
+# Sub-task download / log endpoints — same shape as the parent's
+# /jobs/{id}/download but resolved through a sub-task row. Lives
+# under /jobs/* so it shares the auth namespace once Phase 7 adds it.
+
+@router.get("/subtasks/{subtask_id}/download")
+def download_subtask_output(
+    subtask_id: str,
+    db: Session = Depends(get_session),
+) -> FileResponse:
+    sub = db.get(JobSubTask, subtask_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="subtask not found")
+    if sub.status != JobStatus.DONE or not sub.output_path:
+        raise HTTPException(status_code=409, detail=f"subtask not downloadable (status={sub.status.value})")
+    path = Path(sub.output_path)
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="output file no longer on disk")
+    media_type, _ = mimetypes.guess_type(str(path))
+    return FileResponse(
+        path=str(path),
+        media_type=media_type or "application/octet-stream",
+        filename=path.name,
+    )
+
+
+@router.get("/subtasks/{subtask_id}/log", response_class=PlainTextResponse)
+def get_subtask_log(subtask_id: str, db: Session = Depends(get_session)) -> str:
+    sub = db.get(JobSubTask, subtask_id)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="subtask not found")
+    if not sub.log_path:
+        raise HTTPException(status_code=404, detail="no log for this subtask")
+    path = Path(sub.log_path)
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="log file no longer on disk")
+    return path.read_text(encoding="utf-8")
 
 
 @router.get("/{job_id}/log", response_class=PlainTextResponse)

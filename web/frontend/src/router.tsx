@@ -1,10 +1,11 @@
 /**
  * TanStack Router setup (code-based — file-based is fine but overkill
- * for the 4-route MVP).
+ * for the small route set).
  *
  * Routes:
  *   /             redirect → /new
- *   /new          NewJobPage
+ *   /new          NewJobPage (text-input single agent)
+ *   /new-audio    NewAudioPage (STT-driven multi-task pipeline)
  *   /jobs         "Coming soon" (history is Phase 6)
  *   /jobs/$jobId  JobDetailPage
  */
@@ -17,6 +18,7 @@ import {
 } from "@tanstack/react-router"
 import { Shell } from "@/components/layout/Shell"
 import { NewJobPage } from "@/routes/NewJob"
+import { NewAudioPage } from "@/routes/NewAudio"
 import { JobDetailPage } from "@/routes/JobDetail"
 import { ComingSoonPage } from "@/routes/Comingsoon"
 
@@ -40,6 +42,12 @@ const newJobRoute = createRoute({
   component: NewJobPage,
 })
 
+const newAudioRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/new-audio",
+  component: NewAudioPage,
+})
+
 const jobsIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs",
@@ -55,6 +63,7 @@ const jobDetailRoute = createRoute({
 const routeTree = rootRoute.addChildren([
   indexRoute,
   newJobRoute,
+  newAudioRoute,
   jobsIndexRoute,
   jobDetailRoute,
 ])

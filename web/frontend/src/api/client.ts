@@ -11,9 +11,13 @@ import type { components } from "./generated"
 export type JobStatus = components["schemas"]["JobStatus"]
 export type JobResponse = components["schemas"]["JobResponse"]
 export type JobCreateRequest = components["schemas"]["JobCreateRequest"]
-// AgentType is inlined into JobCreateRequest["type"] in the OpenAPI
-// schema; export it under a more useful name here.
-export type AgentType = JobCreateRequest["type"]
+export type JobSubTaskResponse = components["schemas"]["JobSubTaskResponse"]
+export type UploadResponse = components["schemas"]["UploadResponse"]
+// JobType (the wider union including stt_pipeline) is inlined into
+// JobCreateRequest["type"]; AgentType is the narrower concrete-agent
+// set, used by the sub-task table and the new-job picker.
+export type JobType = JobCreateRequest["type"]
+export type AgentType = JobSubTaskResponse["agent_type"]
 
 const BASE = "/api"
 
@@ -79,4 +83,50 @@ export const api = {
   /** Cancel a running or awaiting job. */
   cancelJob: (jobId: string) =>
     request<JobResponse>("POST", `/jobs/${jobId}/cancel`),
+
+  /** List sub-tasks of an stt_pipeline parent job. */
+  listSubtasks: (jobId: string) =>
+    request<JobSubTaskResponse[]>("GET", `/jobs/${jobId}/subtasks`),
+
+  /** Download a single sub-task's output document. */
+  downloadSubtask: async (subtaskId: string): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${BASE}/jobs/subtasks/${subtaskId}/download`)
+    if (!res.ok) throw new Error(`download failed: ${res.status}`)
+    const cd = res.headers.get("Content-Disposition") || ""
+    const match = cd.match(/filename\*?=(?:UTF-8'')?"?([^"]+)"?/i)
+    const filename = match?.[1] ? decodeURIComponent(match[1]) : `subtask-${subtaskId}.docx`
+    return { blob: await res.blob(), filename }
+  },
+
+  /** Upload an audio file via multipart. Reports progress via the
+   *  optional onProgress callback. Uses XMLHttpRequest because the
+   *  fetch API doesn't expose upload-progress events. */
+  uploadAudio: (
+    file: File,
+    onProgress?: (sent: number, total: number) => void,
+  ): Promise<UploadResponse> => {
+    return new Promise((resolve, reject) => {
+      const form = new FormData()
+      form.append("file", file, file.name)
+      const xhr = new XMLHttpRequest()
+      xhr.open("POST", `${BASE}/uploads/audio`)
+      xhr.responseType = "json"
+      if (onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(e.loaded, e.total)
+        }
+      }
+      xhr.onerror = () => reject(new Error("upload network error"))
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(xhr.response as UploadResponse)
+        } else {
+          const detail = (xhr.response as { detail?: string } | null)?.detail
+            ?? `upload failed: ${xhr.status}`
+          reject(new Error(detail))
+        }
+      }
+      xhr.send(form)
+    })
+  },
 }

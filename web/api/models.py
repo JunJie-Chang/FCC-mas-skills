@@ -126,3 +126,49 @@ class JobEvent(Base):
     ts:      Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
     job: Mapped[Job] = relationship(back_populates="events")
+
+
+class Upload(Base):
+    """
+    One audio (or other) upload tied to a user. Referenced by jobs via
+    `Job.extra["upload_id"]`. Lifetime managed externally — the cleanup
+    job (Phase 7) sweeps files >30 days old.
+    """
+    __tablename__ = "uploads"
+
+    id:           Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    user_id:      Mapped[str] = mapped_column(String(128), default="local")
+    filename:     Mapped[str] = mapped_column(String(512))    # original client filename
+    path:         Mapped[str] = mapped_column(String(512))    # absolute path on disk
+    size_bytes:   Mapped[int] = mapped_column(Integer)
+    mime:         Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    created_at:   Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class JobSubTask(Base):
+    """
+    One agent run that's a child of a stt_pipeline parent job. The
+    parent's planner.confirm step produces N tasks; each runs through
+    router.dispatch and gets its own row + output / cost. Frontend
+    renders these as nested cards under the parent.
+    """
+    __tablename__ = "job_subtasks"
+
+    id:           Mapped[str] = mapped_column(String(32), primary_key=True, default=_new_id)
+    parent_id:    Mapped[str] = mapped_column(String(32), ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    idx:          Mapped[int] = mapped_column(Integer)         # 0-based position in batch
+    agent_type:   Mapped[str] = mapped_column(String(32))
+    label:        Mapped[str] = mapped_column(String(255))
+    instruction:  Mapped[str] = mapped_column(Text)
+
+    status:       Mapped[JobStatus] = mapped_column(
+        SAEnum(JobStatus, native_enum=False, length=24),
+        default=JobStatus.QUEUED,
+    )
+    output_path:  Mapped[str | None] = mapped_column(String(512), nullable=True)
+    log_path:     Mapped[str | None] = mapped_column(String(512), nullable=True)
+    cost_usd:     Mapped[float] = mapped_column(Float, default=0.0)
+    error:        Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    started_at:   Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

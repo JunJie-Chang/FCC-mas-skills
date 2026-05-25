@@ -87,6 +87,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/subtasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Subtasks
+         * @description List all sub-tasks of an stt_pipeline parent job, ordered by `idx`.
+         *     Returns [] for jobs that aren't stt_pipeline.
+         */
+        get: operations["list_subtasks_jobs__job_id__subtasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/log": {
         parameters: {
             query?: never;
@@ -172,6 +193,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/uploads/audio": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Upload Audio
+         * @description Accept an audio upload, persist it, return the Upload row.
+         *
+         *     The file is streamed to disk in chunks rather than loaded into
+         *     memory — handles 100 MB files without RAM pressure.
+         */
+        post: operations["upload_audio_uploads_audio_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Upload */
+        get: operations["get_upload_uploads__upload_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -193,6 +254,14 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** Body_upload_audio_uploads_audio_post */
+        Body_upload_audio_uploads_audio_post: {
+            /**
+             * File
+             * @description Audio file for STT
+             */
+            file: string;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -201,16 +270,22 @@ export interface components {
         /**
          * JobCreateRequest
          * @description Submit a new job. Free-text instruction + agent type + a few knobs.
-         *     Optional `extra` carries type-specific data (e.g. translation needs
-         *     title / source / body_text; podcast needs explicit questions).
+         *
+         *     For single-agent jobs: pass instruction as the free-text task.
+         *     For stt_pipeline jobs: pass extra={"upload_id": "<id>"} and use
+         *     instruction="" (or a label) — the actual instructions come from
+         *     parse_tasks after STT transcribes the audio.
          */
         JobCreateRequest: {
             /**
              * Type
              * @enum {string}
              */
-            type: "company_info" | "person_info" | "translation" | "letter" | "meeting" | "verbal_cleanup" | "podcast" | "speech_ppt";
-            /** Instruction */
+            type: "company_info" | "person_info" | "translation" | "letter" | "meeting" | "verbal_cleanup" | "podcast" | "speech_ppt" | "stt_pipeline";
+            /**
+             * Instruction
+             * @default
+             */
             instruction: string;
             /**
              * Intern Name
@@ -245,7 +320,7 @@ export interface components {
              * Type
              * @enum {string}
              */
-            type: "company_info" | "person_info" | "translation" | "letter" | "meeting" | "verbal_cleanup" | "podcast" | "speech_ppt";
+            type: "company_info" | "person_info" | "translation" | "letter" | "meeting" | "verbal_cleanup" | "podcast" | "speech_ppt" | "stt_pipeline";
             /** Instruction */
             instruction: string;
             /** Intern Name */
@@ -285,6 +360,64 @@ export interface components {
          * @enum {string}
          */
         JobStatus: "queued" | "running" | "needs_confirm" | "needs_subject_review" | "needs_slide_confirm" | "done" | "failed" | "cancelled";
+        /**
+         * JobSubTaskResponse
+         * @description One child of an stt_pipeline parent. Frontend renders these as
+         *     nested cards under the parent job's detail page.
+         */
+        JobSubTaskResponse: {
+            /** Id */
+            id: string;
+            /** Parent Id */
+            parent_id: string;
+            /** Idx */
+            idx: number;
+            /**
+             * Agent Type
+             * @enum {string}
+             */
+            agent_type: "company_info" | "person_info" | "translation" | "letter" | "meeting" | "verbal_cleanup" | "podcast" | "speech_ppt";
+            /** Label */
+            label: string;
+            /** Instruction */
+            instruction: string;
+            status: components["schemas"]["JobStatus"];
+            /** Output Path */
+            output_path?: string | null;
+            /** Log Path */
+            log_path?: string | null;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /** Error */
+            error?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Completed At */
+            completed_at?: string | null;
+        };
+        /**
+         * UploadResponse
+         * @description Returned by POST /uploads/audio. Frontend stashes upload_id and
+         *     references it in the stt_pipeline job's extra payload.
+         */
+        UploadResponse: {
+            /** Id */
+            id: string;
+            /** Filename */
+            filename: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** Mime */
+            mime: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -433,6 +566,37 @@ export interface operations {
             };
         };
     };
+    list_subtasks_jobs__job_id__subtasks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobSubTaskResponse"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_log_jobs__job_id__log_get: {
         parameters: {
             query?: never;
@@ -519,6 +683,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upload_audio_uploads_audio_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_upload_audio_uploads_audio_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_upload_uploads__upload_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UploadResponse"];
                 };
             };
             /** @description Validation Error */

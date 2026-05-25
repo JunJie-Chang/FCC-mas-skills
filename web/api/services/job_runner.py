@@ -1,20 +1,26 @@
 """
 web/api/services/job_runner.py — Bridge from HTTP job rows to agent runs.
 
-What this does on a queued Job:
-  1. Mark status=RUNNING, started_at=now.
-  2. Construct a per-job CostTracker bound for the agent's worker thread
-     so the CLI's global tracker stays untouched.
-  3. Construct a progress_cb that pushes events through the in-process
-     bus (which persists them and fans out to SSE subscribers).
-  4. Invoke the agent in a thread pool via asyncio.to_thread (agents
-     are sync and use blocking SDKs — keeping them off the event loop
-     is required, not optional).
-  5. On return / exception, write final status, cost_usd, output_path,
-     log_path, error message.
+Two execution paths:
 
-Phase 1 supports `company_info` only. Other agent_types raise a
-clear NotImplementedError; the routes layer surfaces that as HTTP 501.
+  Single-agent (Phase 1)        Job.type ∈ concrete AgentType
+     execute_job
+       └─ _run_single_agent
+             └─ _dispatch_blocking(agent_type, ...)
+
+  STT pipeline (Phase 5)        Job.type == "stt_pipeline"
+     execute_job
+       └─ _run_stt_pipeline
+             ├─ utils.stt.transcribe(audio_path)
+             ├─ utils.subject_review.review_subjects   ← needs_subject_review checkpoint
+             ├─ utils.planner.parse_tasks
+             ├─ utils.planner.confirm                  ← needs_confirm checkpoint
+             └─ for each task: router.dispatch with sub-task progress_cb
+
+Common machinery (per-job CostTracker via `use_tracker`, per-job
+WebConfirmStrategy via `use_strategy`, progress_cb publishing via the
+bus, asyncio.to_thread for the blocking agent code) is shared in
+execute_job's setup/teardown.
 """
 
 import asyncio
@@ -27,7 +33,7 @@ from sqlalchemy.orm import Session
 from utils.confirm import use_strategy
 from utils.cost_tracker import CostTracker, use_tracker
 from web.api.db import SessionLocal
-from web.api.models import Job, JobStatus
+from web.api.models import Job, JobStatus, JobSubTask, Upload
 from web.api.services.confirm_strategy import WebConfirmStrategy
 from web.api.services.progress_bus import bus
 
@@ -38,7 +44,12 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ── Agent dispatch ───────────────────────────────────────────────────
+def _new_subtask_id() -> str:
+    import uuid
+    return uuid.uuid4().hex
+
+
+# ── Single-agent dispatch ───────────────────────────────────────────
 
 def _dispatch_blocking(
     agent_type: str,
@@ -51,16 +62,13 @@ def _dispatch_blocking(
     progress_cb,
 ) -> dict[str, Any]:
     """
-    Run the agent. Synchronous on purpose — called via asyncio.to_thread.
-
-    The agent's own per-job state (cost tracker, confirm strategy) is
-    bound for the duration of this call via contextvars / threading.local
-    set up by the caller.
+    Run a single agent. Synchronous on purpose — called via
+    asyncio.to_thread (or from the STT pipeline's own worker thread).
 
     Currently enabled types:
         company_info  (Phase 1)
-        speech_ppt    (Phase 4 — exercises the confirm_slides checkpoint)
-    Other types reach Phase 3 / 5.
+        speech_ppt    (Phase 4)
+    Others reach Phase 3 / 5.
     """
     if agent_type == "company_info":
         from agents.company_info_agent import run as agent_run
@@ -85,19 +93,200 @@ def _dispatch_blocking(
             progress_cb=progress_cb,
         )
 
-    # Other types reach Phase 3 / 5. Raising lets the runner surface a
-    # clean error status to the user instead of silently hanging.
     raise NotImplementedError(
         f"agent_type {agent_type!r} not enabled yet"
     )
 
 
-# ── Job execution ────────────────────────────────────────────────────
+# ── STT pipeline ────────────────────────────────────────────────────
+
+def _resolve_upload_path(upload_id: str) -> str:
+    """Look up an Upload row by id; return its on-disk path. Raises
+    ValueError if missing — caller wraps in agent error semantics."""
+    with SessionLocal() as db:
+        row = db.get(Upload, upload_id)
+        if row is None:
+            raise ValueError(f"upload_id {upload_id!r} not found")
+        return row.path
+
+
+def _wrap_subtask_progress_cb(
+    parent_progress_cb,
+    subtask_id: str,
+    subtask_idx: int,
+):
+    """
+    Decorate the parent's progress_cb so every sub-task event carries
+    `subtask_idx` + `subtask_id` in its payload. Frontend uses these to
+    group the unified event stream into per-card sub-task logs.
+    """
+    def cb(event: dict[str, Any]) -> None:
+        if parent_progress_cb is None:
+            return
+        # Don't mutate the caller's dict — agents may keep a reference
+        # to it for their own bookkeeping.
+        parent_progress_cb({
+            **event,
+            "subtask_idx": subtask_idx,
+            "subtask_id":  subtask_id,
+        })
+    return cb
+
+
+def _run_stt_pipeline(
+    job_id: str,
+    intern_name: str,
+    task_date: str,
+    mode: str,
+    extra: dict[str, Any],
+    progress_cb,
+) -> dict[str, Any]:
+    """
+    The full STT path: transcribe audio, optionally review subjects,
+    parse tasks, confirm, then dispatch each task as a sub-task. The
+    parent job's `output_path` is left empty (each sub-task has its
+    own); the parent's cost is the rolling sum of sub-task costs.
+
+    Strategy hooks at subject_review and planner.confirm are wired via
+    the use_strategy() context already established by execute_job.
+    """
+    upload_id = extra.get("upload_id")
+    if not upload_id:
+        raise ValueError("stt_pipeline requires extra.upload_id")
+
+    audio_path = _resolve_upload_path(upload_id)
+
+    # Lazy imports so the web layer's startup time isn't blown up by
+    # the agent dep tree (openai, anthropic, langgraph, etc.).
+    from utils.stt import transcribe
+    from utils.subject_review import extract_subject_mentions, review_subjects
+    from utils.planner import parse_tasks, confirm
+    from router import dispatch as router_dispatch
+
+    # 1. STT
+    progress_cb({"kind": "stt_started", "ts": _utcnow().isoformat()})
+    transcript = transcribe(audio_path)
+    progress_cb({
+        "kind": "stt_completed",
+        "ts": _utcnow().isoformat(),
+        "n_chars": len(transcript),
+    })
+
+    # 2. Subject review (Haiku extract → strategy presents → user corrects)
+    mentions = extract_subject_mentions(transcript)
+    if mentions:
+        transcript = review_subjects(transcript, mentions)
+
+    # 3. Parse → confirm
+    tasks = parse_tasks(transcript)
+    if not tasks:
+        return {}   # nothing to do; job_runner marks CANCELLED
+    confirmed = confirm(tasks)
+    if confirmed is None:
+        return {}   # user cancelled at planner.confirm
+    tasks = confirmed
+
+    # 4. Dispatch each task. Sub-task rows track per-task output / cost.
+    progress_cb({
+        "kind": "subtasks_planned",
+        "ts": _utcnow().isoformat(),
+        "n": len(tasks),
+    })
+
+    outputs: list[str] = []
+    for idx, plan_task in enumerate(tasks):
+        subtask_id = _new_subtask_id()
+        # Persist sub-task row up front so the frontend can render it
+        # at "queued" state immediately when the event arrives.
+        with SessionLocal() as db:
+            db.add(JobSubTask(
+                id          = subtask_id,
+                parent_id   = job_id,
+                idx         = idx,
+                agent_type  = plan_task.agent_type,
+                label       = plan_task.label,
+                instruction = plan_task.instruction,
+                status      = JobStatus.RUNNING,
+                started_at  = _utcnow(),
+            ))
+            db.commit()
+
+        progress_cb({
+            "kind":        "subtask_started",
+            "ts":          _utcnow().isoformat(),
+            "subtask_id":  subtask_id,
+            "subtask_idx": idx,
+            "agent_type":  plan_task.agent_type,
+            "label":       plan_task.label,
+        })
+
+        sub_cb = _wrap_subtask_progress_cb(progress_cb, subtask_id, idx)
+        sub_tracker = CostTracker()
+
+        sub_error: str | None = None
+        sub_result: dict[str, Any] = {}
+        try:
+            with use_tracker(sub_tracker):
+                sub_result = router_dispatch(
+                    task        = plan_task,
+                    intern_name = intern_name,
+                    task_date   = task_date,
+                    mode        = mode,
+                    progress_cb = sub_cb,
+                )
+        except Exception as exc:
+            sub_error = f"{type(exc).__name__}: {exc}"
+            log.exception("subtask %d (%s) failed", idx, plan_task.agent_type)
+
+        sub_cost = sub_tracker.total_usd()
+        sub_status = (
+            JobStatus.FAILED if sub_error else
+            JobStatus.CANCELLED if not sub_result.get("output_path") else
+            JobStatus.DONE
+        )
+
+        with SessionLocal() as db:
+            row = db.get(JobSubTask, subtask_id)
+            if row is not None:
+                row.status       = sub_status
+                row.output_path  = sub_result.get("output_path")
+                row.log_path     = sub_result.get("log_path")
+                row.cost_usd     = sub_cost
+                row.error        = sub_error
+                row.completed_at = _utcnow()
+                db.commit()
+
+        progress_cb({
+            "kind":        "subtask_completed",
+            "ts":          _utcnow().isoformat(),
+            "subtask_id":  subtask_id,
+            "subtask_idx": idx,
+            "status":      sub_status.value,
+            "cost_usd":    sub_cost,
+            "error":       sub_error,
+        })
+
+        if sub_result.get("output_path"):
+            outputs.append(sub_result["output_path"])
+
+    # Parent job aggregates: we return an empty output_path (no single
+    # "the" docx) but populate `extra.output_paths` so the frontend can
+    # offer a bulk download / list. cost_usd is the sum of sub-tracker
+    # totals — execute_job re-reads that from the tracker we're not
+    # holding, so we instead persist via DB sub-task aggregation.
+    return {
+        "output_path": "",  # explicit empty: parent has no single file
+        "log_path":    "",
+        "extra_outputs": outputs,
+    }
+
+
+# ── Top-level job execution ─────────────────────────────────────────
 
 async def execute_job(job_id: str) -> None:
     """
-    Entry point scheduled via asyncio.create_task from the POST /jobs
-    handler. Owns the full lifecycle for one job.
+    Entry point scheduled via asyncio.create_task from POST /jobs.
+    Owns the full lifecycle for one job (single-agent OR stt_pipeline).
     """
     # Step 1: claim — mark RUNNING.
     with SessionLocal() as db:  # type: Session
@@ -114,46 +303,53 @@ async def execute_job(job_id: str) -> None:
 
     bus.publish_from_thread(job_id, {"kind": "job_started", "ts": _utcnow().isoformat()})
 
-    # Step 2: run. Per-job tracker isolates cost; progress_cb publishes
-    # via the bus. asyncio.to_thread releases the event loop while the
-    # blocking agent (HTTP requests, sleeps, JSON parsing) runs.
     tracker = CostTracker()
 
     def progress_cb(event: dict[str, Any]) -> None:
-        # Called from the worker thread — bus handles the loop hop.
         bus.publish_from_thread(job_id, event)
 
-    # Capture the fields we need now (on the event loop, with an open
-    # session) so the worker thread doesn't have to re-query the DB and
-    # so an ORM detach is unnecessary.
-    with SessionLocal() as db:  # type: Session
+    # Snapshot fields outside the worker thread.
+    with SessionLocal() as db:
         job = db.get(Job, job_id)
         if job is None:
             return
-        agent_kwargs = dict(
-            agent_type=job.type,
-            instruction=job.instruction,
-            intern_name=job.intern_name,
-            task_date=job.created_at.strftime("%Y-%m-%d"),
-            subdir=job.subdir or "adhoc",
-            mode=job.mode,
-            extra=dict(job.extra or {}),
-        )
+        job_type     = job.type
+        instruction  = job.instruction
+        intern_name  = job.intern_name
+        task_date    = job.created_at.strftime("%Y-%m-%d")
+        subdir       = job.subdir or "adhoc"
+        mode         = job.mode
+        extra        = dict(job.extra or {})
 
     confirm_strategy = WebConfirmStrategy(job_id=job_id)
 
-    def _run_with_tracker() -> dict[str, Any]:
-        # Thread-local bind for cost_tracker AND confirm strategy survive
-        # within this thread for the lifetime of the with-block, so
-        # agent code's tracker.record_* + planner.confirm() / etc. go
-        # to the per-job instances.
+    def _run() -> dict[str, Any]:
+        # Per-job cost tracker + confirm strategy bound for this thread.
         with use_tracker(tracker), use_strategy(confirm_strategy):
-            return _dispatch_blocking(progress_cb=progress_cb, **agent_kwargs)
+            if job_type == "stt_pipeline":
+                return _run_stt_pipeline(
+                    job_id      = job_id,
+                    intern_name = intern_name,
+                    task_date   = task_date,
+                    mode        = mode,
+                    extra       = extra,
+                    progress_cb = progress_cb,
+                )
+            return _dispatch_blocking(
+                agent_type  = job_type,
+                instruction = instruction,
+                intern_name = intern_name,
+                task_date   = task_date,
+                subdir      = subdir,
+                mode        = mode,
+                extra       = extra,
+                progress_cb = progress_cb,
+            )
 
     error_msg: str | None = None
     result: dict[str, Any] = {}
     try:
-        result = await asyncio.to_thread(_run_with_tracker)
+        result = await asyncio.to_thread(_run)
     except NotImplementedError as exc:
         error_msg = str(exc)
         log.warning("job %s rejected: %s", job_id, error_msg)
@@ -161,30 +357,48 @@ async def execute_job(job_id: str) -> None:
         error_msg = f"{type(exc).__name__}: {exc}"
         log.exception("job %s failed", job_id)
 
-    # Step 3: persist final state. Three cases:
-    #   - error_msg set → FAILED
-    #   - no output_path → CANCELLED (agent returned cleanly without a
-    #     deliverable, which means it took the early-exit edge after a
-    #     user-cancelled checkpoint; e.g. speech_ppt confirm_slides=False)
-    #   - otherwise → DONE
-    # Respect a /cancel route's pre-set CANCELLED status either way.
-    cost_usd = tracker.total_usd()
-    if error_msg:
-        final_status = JobStatus.FAILED
-    elif not result.get("output_path"):
-        final_status = JobStatus.CANCELLED
+    # Step 3: persist final state.
+    parent_cost_usd = tracker.total_usd()
+    is_stt = (job_type == "stt_pipeline")
+
+    # For STT parents, sum sub-task costs (they ran under their own
+    # CostTracker instances inside the pipeline and aren't included in
+    # the parent's `tracker`). The parent's tracker still has the STT
+    # call cost (utils/stt.py records into the active tracker).
+    if is_stt:
+        with SessionLocal() as db:
+            subtasks = (
+                db.query(JobSubTask)
+                .filter(JobSubTask.parent_id == job_id)
+                .all()
+            )
+        sub_cost_total = sum(s.cost_usd for s in subtasks)
+        any_output = any(s.output_path for s in subtasks)
+        parent_cost_usd += sub_cost_total
+
+        if error_msg:
+            final_status = JobStatus.FAILED
+        elif not any_output:
+            # All sub-tasks failed / cancelled — surface as parent
+            # CANCELLED so the UI doesn't claim success.
+            final_status = JobStatus.CANCELLED
+        else:
+            final_status = JobStatus.DONE
     else:
-        final_status = JobStatus.DONE
+        if error_msg:
+            final_status = JobStatus.FAILED
+        elif not result.get("output_path"):
+            final_status = JobStatus.CANCELLED
+        else:
+            final_status = JobStatus.DONE
 
     with SessionLocal() as db:
         job = db.get(Job, job_id)
         if job is None:
             return
         if job.status == JobStatus.CANCELLED:
-            # User cancelled — keep terminal state, just record cost
-            # and (if the agent did produce output before cancel) the
-            # paths. Don't overwrite the cancel.
-            job.cost_usd = cost_usd
+            # User cancelled mid-run — preserve.
+            job.cost_usd = parent_cost_usd
             if result.get("output_path"):
                 job.output_path = result["output_path"]
                 job.log_path = result.get("log_path")
@@ -193,15 +407,19 @@ async def execute_job(job_id: str) -> None:
             bus.publish_from_thread(job_id, {
                 "kind": "job_cancelled",
                 "ts":   _utcnow().isoformat(),
-                "cost_usd": cost_usd,
+                "cost_usd": parent_cost_usd,
             })
             return
         job.status = final_status
         job.completed_at = _utcnow()
-        job.cost_usd = cost_usd
+        job.cost_usd = parent_cost_usd
         job.error = error_msg
         job.output_path = result.get("output_path")
         job.log_path = result.get("log_path")
+        # STT parents stash aggregated sub-output paths in extra for the
+        # frontend's bulk-download UI.
+        if is_stt and result.get("extra_outputs"):
+            job.extra = {**(job.extra or {}), "output_paths": result["extra_outputs"]}
         db.commit()
 
     bus.publish_from_thread(job_id, {
@@ -211,7 +429,7 @@ async def execute_job(job_id: str) -> None:
             "job_completed"
         ),
         "ts":   _utcnow().isoformat(),
-        "status": final_status.value,
-        "cost_usd": cost_usd,
-        "error": error_msg,
+        "status":   final_status.value,
+        "cost_usd": parent_cost_usd,
+        "error":    error_msg,
     })

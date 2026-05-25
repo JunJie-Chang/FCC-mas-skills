@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { CheckpointGate } from "@/components/checkpoints/CheckpointGate"
+import { SubTaskList } from "@/components/SubTaskList"
+import { useQueryClient } from "@tanstack/react-query"
 import {
   AlertCircle, CheckCircle2, Clock, Download, FileText, Loader2,
   XCircle, Radio, PauseCircle,
@@ -31,12 +33,29 @@ export function JobDetailPage() {
   const { data: job, isLoading } = useJob(jobId)
   const { events, terminal, connected } = useJobEvents(jobId)
   const invalidate = useInvalidateJob()
+  const qc = useQueryClient()
 
   // When the SSE stream sends a terminal event, refetch the job row so
   // status / cost / output_path reflect the final state.
   useEffect(() => {
     if (terminal && jobId) invalidate(jobId)
   }, [terminal, jobId, invalidate])
+
+  // Sub-task progress events should refresh the sub-task list cache
+  // (TanStack Query won't know to refetch otherwise — and 10s polling
+  // would feel laggy when the user is watching live).
+  useEffect(() => {
+    if (!jobId || events.length === 0) return
+    const last = events[events.length - 1]
+    if (
+      last &&
+      (last.kind === "subtask_started" ||
+       last.kind === "subtask_completed" ||
+       last.kind === "subtasks_planned")
+    ) {
+      qc.invalidateQueries({ queryKey: ["jobs", jobId, "subtasks"] })
+    }
+  }, [events.length, jobId, qc, events])
 
   const handleDownload = async () => {
     if (!jobId) return
@@ -136,6 +155,10 @@ export function JobDetailPage() {
           </CardContent>
         )}
       </Card>
+
+      {/* Sub-tasks (only for stt_pipeline jobs — component handles
+          its own "no-op when not enabled" rendering) */}
+      <SubTaskList parentId={job.id} enabled={job.type === "stt_pipeline"} />
 
       {/* Live progress log */}
       <Card>
@@ -253,6 +276,17 @@ function summarize(e: JobEvent): string {
       return `已${p.reason === "cancelled" ? "取消" : p.reason === "timeout" ? "逾時" : "確認"}（耗時 ${(p.elapsed as number | undefined)?.toFixed(1) ?? "?"}s）`
     case "job_cancelled":
       return "任務已取消"
+    case "stt_started":
+      return "STT 轉錄開始"
+    case "stt_completed":
+      return `STT 完成（${String(p.n_chars ?? "?")} 字）`
+    case "subtasks_planned":
+      return `規劃完成：${String(p.n ?? "?")} 個子任務`
+    case "subtask_started":
+      return `子任務 ${String((p.subtask_idx as number ?? 0) + 1)} 開始：[${String(p.agent_type ?? "?")}] ${String(p.label ?? "")}`
+    case "subtask_completed":
+      return `子任務 ${String((p.subtask_idx as number ?? 0) + 1)} ${p.status === "done" ? "完成" : p.status === "cancelled" ? "已取消" : "失敗"} · cost=$${(p.cost_usd as number | undefined)?.toFixed(4) ?? "?"}` +
+             (p.error ? ` · ${String(p.error)}` : "")
     default: {
       // Fallback: stringify whatever's there minus the noisy fields.
       const { kind: _k, ts: _t, _event_id: _i, ...rest } = p

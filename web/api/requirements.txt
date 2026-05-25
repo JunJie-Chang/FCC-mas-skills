@@ -12,3 +12,4 @@ sse-starlette>=2.1
 sqlalchemy>=2.0
 pydantic>=2.10
 pydantic-settings>=2.6
+python-multipart>=0.0.20  # required by FastAPI for File / UploadFile (Phase 5)

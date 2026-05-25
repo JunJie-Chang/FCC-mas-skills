@@ -16,6 +16,15 @@ web/api/data/*.db
 web/api/data/*.db-journal
 web/api/data/*.db-wal
 web/api/data/*.db-shm
+web/api/uploads/*/
+web/api/uploads/**/*.m4a
+web/api/uploads/**/*.mp3
+web/api/uploads/**/*.wav
+web/api/uploads/**/*.aiff
+web/api/uploads/**/*.webm
+web/api/uploads/**/*.ogg
+web/api/uploads/**/*.opus
+web/api/uploads/**/*.flac
 
 # macOS
 .DS_Store

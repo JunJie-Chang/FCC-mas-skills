@@ -84,6 +84,9 @@ export function useJobEvents(jobId: string | undefined) {
       "confirm_tasks_request", "confirm_tasks_resolved",
       "subject_review_request", "subject_review_resolved",
       "slide_confirm_request", "slide_confirm_resolved",
+      // STT pipeline events (Phase 5)
+      "stt_started", "stt_completed",
+      "subtasks_planned", "subtask_started", "subtask_completed",
       "info", "warning", "error",
     ]
     names.forEach((n) => es.addEventListener(n, handle as EventListener))

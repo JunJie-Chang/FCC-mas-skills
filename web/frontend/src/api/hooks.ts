@@ -49,3 +49,14 @@ export function useInvalidateJob() {
   const qc = useQueryClient()
   return (jobId: string) => qc.invalidateQueries({ queryKey: jobKeys.detail(jobId) })
 }
+
+export function useJobSubtasks(jobId: string | undefined, isStt: boolean) {
+  return useQuery({
+    queryKey: jobId ? ["jobs", jobId, "subtasks"] : ["jobs", "noop", "subtasks"],
+    queryFn:  () => api.listSubtasks(jobId!),
+    enabled:  !!jobId && isStt,
+    // Sub-task rows churn during STT pipeline; refetch every 10s as a
+    // safety net (frontend also invalidates on subtask_completed events).
+    refetchInterval: 10_000,
+  })
+}

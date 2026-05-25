@@ -1,7 +1,7 @@
 import { Link, useRouterState } from "@tanstack/react-router"
 import { useTheme } from "@/stores/theme"
 import { Button } from "@/components/ui/button"
-import { Moon, Sun, FilePlus2, ListChecks } from "lucide-react"
+import { Moon, Sun, FilePlus2, ListChecks, Mic } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 interface NavItem {
@@ -11,10 +11,11 @@ interface NavItem {
 }
 
 const NAV: NavItem[] = [
-  { href: "/new", label: "新增任務", icon: FilePlus2 },
+  { href: "/new",       label: "新增任務",       icon: FilePlus2 },
+  { href: "/new-audio", label: "口述任務 (STT)", icon: Mic },
   // History route is Phase 6 (FRONTEND_PLAN.md §8). Stubbed in the nav
   // so the layout feels complete; landing on the page shows "coming soon".
-  { href: "/jobs", label: "任務歷史", icon: ListChecks },
+  { href: "/jobs",      label: "任務歷史",       icon: ListChecks },
 ]
 
 export function Shell({ children }: { children: React.ReactNode }) {
