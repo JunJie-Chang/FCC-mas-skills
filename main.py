@@ -114,6 +114,9 @@ def main():
     # ── Step 2: parse into task list ──────────────────────────────
     print("正在解析任務...")
     tasks = parse_tasks(raw_instruction, force_type=args.type)
+    if not tasks:
+        print("未解析出任何可執行任務（輸入可能無實質指令，或 STT 轉錄失敗）。")
+        sys.exit(0)
 
     # ── Step 3: user confirms ─────────────────────────────────────
     if args.yes:
