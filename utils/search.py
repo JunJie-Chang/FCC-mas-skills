@@ -12,6 +12,7 @@ out before feeding the text downstream.
 import os
 import re
 import time
+from email.utils import parsedate_to_datetime
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -21,15 +22,42 @@ _MAX_RETRIES = 4
 _RETRY_DELAY = 3  # seconds between retries
 
 
+def _normalize_pub_date(raw: str) -> str:
+    """
+    Normalize Tavily's published_date to YYYY-MM-DD.
+
+    Tavily returns two formats depending on the topic / source:
+      - ISO 8601: "2025-03-15" or "2025-03-15T10:30:00Z"
+      - RFC 2822: "Mon, 18 May 2026 22:26:09 GMT"  (news topic)
+
+    Returns empty string when the field is missing or unparseable.
+    Keeps the output uniform so downstream consumers don't need to
+    know which format Tavily picked.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    iso_match = re.match(r"^(\d{4}-\d{2}-\d{2})", raw)
+    if iso_match:
+        return iso_match.group(1)
+    try:
+        return parsedate_to_datetime(raw).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return ""
+
+
 def search(query: str, max_results: int = 3, topic: str = "general") -> list[dict]:
     """
     Run a Tavily search and return a list of result dicts.
 
     Each result dict contains:
-        title   (str)
-        url     (str)
-        content (str)  — snippet / extracted text
-        score   (float)
+        title          (str)
+        url            (str)
+        content        (str)    — snippet / extracted text
+        score          (float)
+        published_date (str)    — YYYY-MM-DD when Tavily provides it
+                                  (typically news topic, ~70-80% coverage);
+                                  empty string otherwise.
 
     Args:
         query:       Search query string.
@@ -54,11 +82,15 @@ def search(query: str, max_results: int = 3, topic: str = "general") -> list[dic
             response = client.search(query=query, max_results=max_results, topic=topic)
             results = []
             for r in response.get("results", []):
+                # Tavily returns published_date in ISO 8601 (general topic)
+                # or RFC 2822 (news topic). Normalize to YYYY-MM-DD.
+                pub_date = _normalize_pub_date(r.get("published_date"))
                 results.append({
-                    "title":   r.get("title", ""),
-                    "url":     r.get("url", ""),
-                    "content": r.get("content", ""),
-                    "score":   r.get("score", 0.0),
+                    "title":          r.get("title", ""),
+                    "url":            r.get("url", ""),
+                    "content":        r.get("content", ""),
+                    "score":          r.get("score", 0.0),
+                    "published_date": pub_date,
                 })
             return results
         except Exception as e:

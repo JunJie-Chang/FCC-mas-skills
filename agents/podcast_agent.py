@@ -532,7 +532,18 @@ def search_and_fetch(state: PodcastState) -> dict:
                     body  = snippet
                     scrape_src = "snippet"
                 title = r["title"]
-                meta  = {}
+                # Backfill pub_date + publication from Tavily search response
+                # and domain lookup so snippet/extract-path articles still
+                # produce a proper subtitle (issue #6). The scrape_src set
+                # by the cascade above ("extract" or "snippet") is preserved.
+                # Author is left empty — Tavily does not surface it, and a
+                # wrong author is worse than none.
+                from utils.news_publications import lookup as _pub_lookup
+                meta = {
+                    "date":        r.get("published_date", ""),
+                    "publication": _pub_lookup(url),
+                    "author":      "",
+                }
 
             # Strip nav menus / link lists / boilerplate (Tavily extract
             # returns raw page markdown), then remove web UI artifacts.
