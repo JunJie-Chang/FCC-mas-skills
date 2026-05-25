@@ -3,10 +3,13 @@
  * for the small route set).
  *
  * Routes:
- *   /             redirect → /new
+ *   /             DashboardPage (recent jobs + spend + CTAs — Phase 6)
  *   /new          NewJobPage (text-input single agent)
  *   /new-audio    NewAudioPage (STT-driven multi-task pipeline)
- *   /jobs         "Coming soon" (history is Phase 6)
+ *   /new-podcast  NewPodcastPage
+ *   /new-speech-ppt NewSpeechPPTPage
+ *   /new-translation NewTranslationPage
+ *   /jobs         JobsListPage (filter + search — Phase 6)
  *   /jobs/$jobId  JobDetailPage
  */
 import {
@@ -14,16 +17,16 @@ import {
   createRoute,
   createRouter,
   Outlet,
-  redirect,
 } from "@tanstack/react-router"
 import { Shell } from "@/components/layout/Shell"
+import { DashboardPage } from "@/routes/Dashboard"
 import { NewJobPage } from "@/routes/NewJob"
 import { NewAudioPage } from "@/routes/NewAudio"
 import { NewTranslationPage } from "@/routes/NewTranslation"
 import { NewPodcastPage } from "@/routes/NewPodcast"
 import { NewSpeechPPTPage } from "@/routes/NewSpeechPPT"
 import { JobDetailPage } from "@/routes/JobDetail"
-import { ComingSoonPage } from "@/routes/Comingsoon"
+import { JobsListPage } from "@/routes/JobsList"
 
 const rootRoute = createRootRoute({
   component: () => (
@@ -36,7 +39,7 @@ const rootRoute = createRootRoute({
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  beforeLoad: () => { throw redirect({ to: "/new" }) },
+  component: DashboardPage,
 })
 
 const newJobRoute = createRoute({
@@ -72,7 +75,7 @@ const newSpeechPPTRoute = createRoute({
 const jobsIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs",
-  component: () => <ComingSoonPage name="任務歷史" />,
+  component: JobsListPage,
 })
 
 const jobDetailRoute = createRoute({

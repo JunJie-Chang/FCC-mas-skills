@@ -13,6 +13,8 @@ export type JobResponse = components["schemas"]["JobResponse"]
 export type JobCreateRequest = components["schemas"]["JobCreateRequest"]
 export type JobSubTaskResponse = components["schemas"]["JobSubTaskResponse"]
 export type UploadResponse = components["schemas"]["UploadResponse"]
+export type JobsListResponse = components["schemas"]["JobsListResponse"]
+export type StatsSummary = components["schemas"]["StatsSummary"]
 // JobType (the wider union including stt_pipeline) is inlined into
 // JobCreateRequest["type"]; AgentType is the narrower concrete-agent
 // set, used by the sub-task table and the new-job picker.
@@ -51,6 +53,24 @@ export const api = {
 
   getJob: (jobId: string) =>
     request<JobResponse>("GET", `/jobs/${jobId}`),
+
+  /** Paginated history with filters + search. */
+  listJobs: (params: {
+    limit?: number; offset?: number;
+    type?: string; status?: string; intern_name?: string;
+    search?: string; date_from?: string; date_to?: string;
+  } = {}) => {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null && v !== "") qs.append(k, String(v))
+    }
+    const q = qs.toString()
+    return request<JobsListResponse>("GET", `/jobs${q ? `?${q}` : ""}`)
+  },
+
+  /** Dashboard aggregate stats. */
+  getStatsSummary: (days = 30) =>
+    request<StatsSummary>("GET", `/stats/summary?days=${days}`),
 
   /**
    * Download a job's .docx as a Blob (so the browser can trigger save).

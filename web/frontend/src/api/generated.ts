@@ -11,7 +11,17 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Jobs
+         * @description History list. Filters compose with AND. `search` runs LIKE
+         *     on the instruction field — fine for the small datasets we're
+         *     working with; if it ever needs to scale, swap for FTS5.
+         *
+         *     Sub-tasks are NOT included as separate rows here — they live
+         *     under their parent stt_pipeline job's detail page. Listing them
+         *     flat would double-count cost.
+         */
+        get: operations["list_jobs_jobs_get"];
         put?: never;
         /**
          * Create Job
@@ -108,6 +118,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/subtasks/{subtask_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Subtask Output */
+        get: operations["download_subtask_output_jobs_subtasks__subtask_id__download_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/subtasks/{subtask_id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Subtask Log */
+        get: operations["get_subtask_log_jobs_subtasks__subtask_id__log_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/jobs/{job_id}/log": {
         parameters: {
             query?: never;
@@ -193,6 +237,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/stats/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Summary
+         * @description Snapshot for the dashboard. `days` controls the rolling window
+         *     for cost / count aggregations and the trend chart; recent_jobs
+         *     always returns the last 5 regardless of window.
+         */
+        get: operations["get_summary_stats_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/uploads/audio": {
         parameters: {
             query?: never;
@@ -261,6 +327,24 @@ export interface components {
              * @description Audio file for STT
              */
             file: string;
+        };
+        /** CostByTypeRow */
+        CostByTypeRow: {
+            /** Type */
+            type: string;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Count */
+            count: number;
+        };
+        /** DailyCostRow */
+        DailyCostRow: {
+            /** Date */
+            date: string;
+            /** Cost Usd */
+            cost_usd: number;
+            /** Count */
+            count: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -398,6 +482,37 @@ export interface components {
             /** Completed At */
             completed_at?: string | null;
         };
+        /** JobsListResponse */
+        JobsListResponse: {
+            /** Jobs */
+            jobs: components["schemas"]["JobResponse"][];
+            /** Total */
+            total: number;
+        };
+        /** StatsSummary */
+        StatsSummary: {
+            /** Window Days */
+            window_days: number;
+            /** Total Cost Usd */
+            total_cost_usd: number;
+            /** Job Count */
+            job_count: number;
+            /** Cost By Type */
+            cost_by_type: components["schemas"]["CostByTypeRow"][];
+            /** Counts By Status */
+            counts_by_status: components["schemas"]["StatusCountRow"][];
+            /** Cost Trend Daily */
+            cost_trend_daily: components["schemas"]["DailyCostRow"][];
+            /** Recent Jobs */
+            recent_jobs: components["schemas"]["JobResponse"][];
+        };
+        /** StatusCountRow */
+        StatusCountRow: {
+            /** Status */
+            status: string;
+            /** Count */
+            count: number;
+        };
         /**
          * UploadResponse
          * @description Returned by POST /uploads/audio. Frontend stashes upload_id and
@@ -440,6 +555,44 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    list_jobs_jobs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                type?: string | null;
+                status?: string | null;
+                intern_name?: string | null;
+                search?: string | null;
+                date_from?: string | null;
+                date_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_job_jobs_post: {
         parameters: {
             query?: never;
@@ -597,6 +750,68 @@ export interface operations {
             };
         };
     };
+    download_subtask_output_jobs_subtasks__subtask_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subtask_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_subtask_log_jobs_subtasks__subtask_id__log_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subtask_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_log_jobs__job_id__log_get: {
         parameters: {
             query?: never;
@@ -683,6 +898,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_summary_stats_summary_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatsSummary"];
                 };
             };
             /** @description Validation Error */

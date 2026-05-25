@@ -32,6 +32,7 @@ sys.path.insert(0, str(_REPO_ROOT))
 from web.api.config import settings   # noqa: E402
 from web.api.db import init_db        # noqa: E402
 from web.api.routes import jobs as jobs_routes      # noqa: E402
+from web.api.routes import stats as stats_routes    # noqa: E402
 from web.api.routes import uploads as uploads_routes  # noqa: E402
 from web.api.services.progress_bus import bus       # noqa: E402
 
@@ -77,6 +78,7 @@ app.add_middleware(
 )
 
 app.include_router(jobs_routes.router)
+app.include_router(stats_routes.router)
 app.include_router(uploads_routes.router)
 
 

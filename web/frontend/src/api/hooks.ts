@@ -50,6 +50,35 @@ export function useInvalidateJob() {
   return (jobId: string) => qc.invalidateQueries({ queryKey: jobKeys.detail(jobId) })
 }
 
+export interface JobListFilters {
+  limit?: number
+  offset?: number
+  type?: string
+  status?: string
+  intern_name?: string
+  search?: string
+  date_from?: string
+  date_to?: string
+}
+
+export function useJobList(filters: JobListFilters) {
+  return useQuery({
+    queryKey: ["jobs-list", filters],
+    queryFn:  () => api.listJobs(filters),
+    placeholderData: (prev) => prev,   // smooth re-fetch on filter change
+  })
+}
+
+export function useStatsSummary(days = 30) {
+  return useQuery({
+    queryKey: ["stats", "summary", days],
+    queryFn:  () => api.getStatsSummary(days),
+    // Dashboard auto-refresh every 30s so a running task's cost
+    // reflects in the headline number.
+    refetchInterval: 30_000,
+  })
+}
+
 export function useJobSubtasks(jobId: string | undefined, isStt: boolean) {
   return useQuery({
     queryKey: jobId ? ["jobs", jobId, "subtasks"] : ["jobs", "noop", "subtasks"],

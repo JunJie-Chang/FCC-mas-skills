@@ -16,11 +16,13 @@ import asyncio
 import json
 import logging
 import mimetypes
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, PlainTextResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -76,6 +78,67 @@ async def create_job(
     # HTTP request.
     asyncio.create_task(execute_job(job.id))
     return job
+
+
+# ── List endpoint with filters + search (Phase 6) ──────────────────
+
+class JobsListResponse(BaseModel):
+    jobs:  list[JobResponse]
+    total: int   # total matching rows (for paginator)
+
+
+@router.get("", response_model=JobsListResponse)
+def list_jobs(
+    db: Session = Depends(get_session),
+    limit:       int = Query(50, ge=1, le=200),
+    offset:      int = Query(0, ge=0),
+    type:        str | None = None,
+    status:      str | None = None,
+    intern_name: str | None = None,
+    search:      str | None = None,   # LIKE %search% on instruction
+    date_from:   str | None = None,   # YYYY-MM-DD (created_at >=)
+    date_to:     str | None = None,   # YYYY-MM-DD (created_at <  next day)
+) -> JobsListResponse:
+    """
+    History list. Filters compose with AND. `search` runs LIKE
+    on the instruction field — fine for the small datasets we're
+    working with; if it ever needs to scale, swap for FTS5.
+
+    Sub-tasks are NOT included as separate rows here — they live
+    under their parent stt_pipeline job's detail page. Listing them
+    flat would double-count cost.
+    """
+    q = db.query(Job)
+    if type:
+        q = q.filter(Job.type == type)
+    if status:
+        q = q.filter(Job.status == JobStatus(status))
+    if intern_name:
+        q = q.filter(Job.intern_name == intern_name)
+    if search:
+        q = q.filter(Job.instruction.ilike(f"%{search}%"))
+    if date_from:
+        try:
+            q = q.filter(Job.created_at >= datetime.fromisoformat(date_from))
+        except ValueError:
+            raise HTTPException(400, f"invalid date_from: {date_from!r} (want YYYY-MM-DD)")
+    if date_to:
+        try:
+            # Inclusive of the to-date — bump to next day so jobs
+            # created at 23:59 still show up.
+            end = datetime.fromisoformat(date_to) + timedelta(days=1)
+            q = q.filter(Job.created_at < end)
+        except ValueError:
+            raise HTTPException(400, f"invalid date_to: {date_to!r} (want YYYY-MM-DD)")
+
+    total = q.count()
+    rows = (
+        q.order_by(Job.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    return JobsListResponse(jobs=rows, total=total)
 
 
 @router.get("/{job_id}", response_model=JobResponse)

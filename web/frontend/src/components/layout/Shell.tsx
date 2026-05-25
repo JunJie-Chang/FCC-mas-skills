@@ -3,7 +3,7 @@ import { useTheme } from "@/stores/theme"
 import { Button } from "@/components/ui/button"
 import {
   Moon, Sun, FilePlus2, ListChecks, Mic, Languages,
-  Headphones, Presentation,
+  Headphones, Presentation, LayoutDashboard,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -11,17 +11,17 @@ interface NavItem {
   href: string
   label: string
   icon: React.ComponentType<{ className?: string }>
+  section?: "home" | "input" | "view"
 }
 
 const NAV: NavItem[] = [
-  { href: "/new",             label: "新增任務",       icon: FilePlus2 },
-  { href: "/new-audio",       label: "口述任務 (STT)", icon: Mic },
-  { href: "/new-podcast",     label: "Podcast 任務",   icon: Headphones },
-  { href: "/new-speech-ppt",  label: "演講 PPT 任務",  icon: Presentation },
-  { href: "/new-translation", label: "翻譯任務",       icon: Languages },
-  // History route is Phase 6 (FRONTEND_PLAN.md §8). Stubbed in the nav
-  // so the layout feels complete; landing on the page shows "coming soon".
-  { href: "/jobs",            label: "任務歷史",       icon: ListChecks },
+  { href: "/",                label: "首頁",           icon: LayoutDashboard, section: "home" },
+  { href: "/new",             label: "新增任務",       icon: FilePlus2,       section: "input" },
+  { href: "/new-audio",       label: "口述任務 (STT)", icon: Mic,             section: "input" },
+  { href: "/new-podcast",     label: "Podcast 任務",   icon: Headphones,      section: "input" },
+  { href: "/new-speech-ppt",  label: "演講 PPT 任務",  icon: Presentation,    section: "input" },
+  { href: "/new-translation", label: "翻譯任務",       icon: Languages,       section: "input" },
+  { href: "/jobs",            label: "任務歷史",       icon: ListChecks,      section: "view" },
 ]
 
 export function Shell({ children }: { children: React.ReactNode }) {
@@ -38,24 +38,35 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <span className="text-[var(--color-muted-fg)]"> mas</span>
           </span>
         </div>
-        <nav className="flex-1 px-3 py-4 flex flex-col gap-1">
-          {NAV.map((item) => {
+        <nav className="flex-1 px-3 py-4 flex flex-col gap-1 overflow-y-auto">
+          {NAV.map((item, idx) => {
             const Icon = item.icon
-            const active = path === item.href || path.startsWith(item.href + "/")
+            // Match active for either the exact path or a sub-route
+            // (so /jobs/foo highlights "任務歷史"), but never let
+            // "/" match every sub-path — explicit equality only.
+            const active = item.href === "/"
+              ? path === "/"
+              : path === item.href || path.startsWith(item.href + "/")
+            const prev = NAV[idx - 1]
+            const divider = prev && prev.section !== item.section
             return (
-              <Link
-                key={item.href}
-                to={item.href}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                  active
-                    ? "bg-[var(--color-muted)] text-[var(--color-fg)] font-medium"
-                    : "text-[var(--color-muted-fg)] hover:bg-[var(--color-muted)] hover:text-[var(--color-fg)]",
+              <div key={item.href}>
+                {divider && (
+                  <div className="h-px bg-[var(--color-border)] mx-3 my-2" aria-hidden />
                 )}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
+                <Link
+                  to={item.href}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                    active
+                      ? "bg-[var(--color-muted)] text-[var(--color-fg)] font-medium"
+                      : "text-[var(--color-muted-fg)] hover:bg-[var(--color-muted)] hover:text-[var(--color-fg)]",
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  {item.label}
+                </Link>
+              </div>
             )
           })}
         </nav>
