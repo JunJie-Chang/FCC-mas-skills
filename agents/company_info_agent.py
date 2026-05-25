@@ -370,9 +370,21 @@ def extract_numbers_node(state: CompanyInfoState) -> dict:
     """
     from utils.number_extract import extract_numbers
 
+    # Pass through high-confidence subject info parsed earlier by
+    # check_financial_need so the Haiku extractor can reject numbers
+    # attributable to other entities (Lite-On in a 智伸科 task, etc.).
+    fin = state.get("financial_check") or {}
+    parts: list[str] = []
+    if fin.get("tickers"):
+        parts.extend(t for t in fin["tickers"] if t)
+    if fin.get("company_name"):
+        parts.append(fin["company_name"])
+    task_subject = " / ".join(parts)
+
     items, numbers_zh = extract_numbers(
         task_instruction=state["task_instruction"],
         evidence=state.get("evidence", []),
+        task_subject=task_subject,
     )
     return {"number_items": items, "numbers_zh": numbers_zh}
 
@@ -485,6 +497,7 @@ def generate_report(state: CompanyInfoState) -> dict:
    - 改寫數值（例如把「94 億美元」寫成「約 90 億美元」「9.4 億美元」「9,400 萬美元」）
    - 重新做單位換算（不要把 "$9.4 billion" 自己翻譯，直接用區塊裡的 "94 億美元"）
    - 用「約」「大約」「近」「逾」「超過」等模糊化前綴包裹（除非 evidence 本身就有這些字）
+   - **主角過濾 backstop**：此區塊由 extract_numbers 預先過濾過，標籤通常已含主角名（例 `gme_market_cap`、`huawei_revenue_2025`）。若仍看到 label 或敘述清楚指向非任務主角的實體（例：任務主角是智伸科但出現 `liteon_*` 標籤、任務主角是佰維但出現 `bayren_*` 標籤），**禁止引用**該筆數字到報告中
 10. **【前提驗證 / 覆蓋度規則】**：若 context 內有「[前提驗證 / 覆蓋度檢查]」區塊，該區塊已逐條標好 status，報告必須嚴格遵守：
     - `[unverified]` 的 premise：**必須明寫**「任務指令所述『XXX』，本次搜尋資料無法驗證」這類句式；**禁止用沾邊但不直接對應的 evidence 撐起這條 premise**（例：instruction 說「政大校長介紹」，evidence 只提到「某董事畢業於政大」— 不可寫「介紹人可能與政大有淵源」這類迂迴回答，必須明寫無法驗證）
     - `[partial]` 的 premise：明寫**確認的部分**、明標**未確認的部分**，不可遮掩

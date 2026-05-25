@@ -130,8 +130,19 @@ def _flatten_evidence(evidence: list[dict]) -> str:
 def extract_numbers(
     task_instruction: str,
     evidence: list[dict],
+    task_subject: str = "",
 ) -> tuple[list[dict], dict[str, str]]:
     """
+    Args:
+        task_instruction: Full instruction text (used both for subject inference
+                          and label naming).
+        evidence:         Tavily search batches; full_content preferred over snippet.
+        task_subject:     Optional high-confidence subject hint (e.g. "GME / EBAY"
+                          for an M&A task, or "佰維存儲" for a single-company task).
+                          When set, the Haiku prompt is anchored on this string;
+                          when empty, Haiku must infer the subject from the
+                          instruction itself.
+
     Returns:
         items:        Raw Haiku echo list — preserved for .log sidecar / debugging.
         numbers_zh:   Canonical Chinese strings keyed by Haiku-assigned label.
@@ -148,11 +159,37 @@ def extract_numbers(
     scale_keys = ", ".join(sorted(SCALE_MULTIPLIERS.keys()))
     currency_keys = ", ".join(sorted(CURRENCY_ZH.keys()))
 
-    prompt = f"""你是數字抽取助理。從下方 evidence 中，**逐字 echo** 與任務相關的數字（金額、百分比、倍數），不做任何計算、不轉換單位、不翻譯成中文。
+    # Subject anchor: anchor explicitly when the caller has high-confidence
+    # subject info; otherwise instruct Haiku to infer subject from instruction
+    # and apply the same off-topic filter.
+    if task_subject.strip():
+        subject_block = (
+            f"任務主角（caller 已確認）：{task_subject.strip()}\n"
+            "→ 只抽取明確屬於這個主角的數字；其他公司 / 機構的數字一律 drop。"
+        )
+    else:
+        subject_block = (
+            "任務主角：請從任務指令辨識主角（公司 / 人物 / 機構 / 概念）。\n"
+            "→ 只抽取明確屬於該主角的數字；其他公司 / 機構的數字一律 drop。"
+        )
+
+    prompt = f"""你是數字抽取助理。從下方 evidence 中，**逐字 echo** 與任務主角相關的數字（金額、百分比、倍數），不做任何計算、不轉換單位、不翻譯成中文。
 
 任務指令：{task_instruction}
 
+{subject_block}
+
 【硬規則】
+0. **主角過濾（最優先）**：每個 candidate 數字都要先回答「這個數字是不是在講主角？」
+   - evidence 內常出現其他公司的廣告 / 推薦欄 / 同產業對照 / 完全不相關但 Tavily 撈進來的新聞
+   - 即使數字本身完整、量級驚人、敘述清楚，**只要主體不是任務主角，一律 drop**
+   - 例 1：任務主角 = 智伸科（越南廠），evidence 提到 Lite-On 在越南投資 1.49 億美元 → **drop**（Lite-On 不是主角）
+   - 例 2：任務主角 = 佰維存儲，evidence 提到 BayREN 灣區能源組織節省 166 百萬噸碳 → **drop**（不同實體）
+   - 例 3：任務主角 = 智帆風能，evidence 提到公牛集團（Goneo）營收 168.31 億人民幣 → **drop**（公牛是插座廠，與風能無關）
+   - 例 4：任務主角 = 巨漢系統科技，evidence 提到漢氏雷射（Han's Laser）營收 162 億人民幣 → **drop**（名字相似但不同公司）
+   - 不確定主體是不是主角 → drop，**寧缺勿濫**
+   - label 命名必須清楚標明主角，不要用 `revenue_2025` 這種任何公司都可套用的 key；用 `<subject>_revenue_2025` 形式
+
 1. **只 echo，不計算、不換算**：value 直接用原文寫的數字；scale 用對應的單位字。對照表：
 
    原文寫                              → value, scale
@@ -191,7 +228,7 @@ def extract_numbers(
 
 7. **不確定的數字**：寧可漏掉也不要捏造；evidence 裡找不到的數字一律不寫。
 
-8. **與任務無關的廣告 / 推薦欄 / 其他公司的數字**：忽略。
+8. **任務無關的廣告 / 推薦欄**：忽略（其他公司數字已在規則 0 涵蓋）。
 
 回傳純 JSON 陣列：
 [
@@ -233,7 +270,14 @@ evidence（前 {_EVIDENCE_CHAR_CAP // 1000}k 字元）：
         return [], {}
 
     if not raw_items:
-        print(f"[number_extract] ⚠ Haiku returned empty array; first 200 chars of raw response: {raw_text[:200]!r}")
+        # Distinguish intentional filtering ("[]" with explanation prose) from
+        # a Haiku response that failed to produce any structured output at all.
+        # The off-topic filter (rule 0) legitimately returns [] when no number
+        # in the evidence belongs to the task subject.
+        if "[]" in raw_text[:50]:
+            print(f"[number_extract] Haiku returned empty array (all evidence numbers attributed to non-subject entities — filter rule 0 active)")
+        else:
+            print(f"[number_extract] ⚠ Haiku returned empty array; first 200 chars of raw response: {raw_text[:200]!r}")
 
     items: list[dict] = []
     numbers_zh: dict[str, str] = {}
