@@ -1,0 +1,65 @@
+@import "tailwindcss";
+@import "@fontsource-variable/inter";
+
+/* Tailwind v4 theme tokens (HSL components — alpha channel applies via Tailwind utilities). */
+@theme {
+  --font-sans: "Inter Variable", system-ui, sans-serif;
+
+  /* shadcn-style semantic tokens. Pegged to FCC's accent red (#EE0000).
+     Light is the canonical / print-safe palette; dark is the secondary.
+     IB documents go to clients sometimes — light mode renders cleanly. */
+  --color-bg:           hsl(0 0% 100%);
+  --color-fg:           hsl(222 47% 11%);
+  --color-muted:        hsl(210 40% 96%);
+  --color-muted-fg:     hsl(215 16% 47%);
+  --color-card:         hsl(0 0% 100%);
+  --color-card-fg:      hsl(222 47% 11%);
+  --color-border:       hsl(214 32% 91%);
+  --color-input:        hsl(214 32% 91%);
+  --color-ring:         hsl(0 100% 47%);  /* FCC red */
+  --color-accent:       hsl(0 100% 47%);  /* FCC #EE0000 */
+  --color-accent-fg:    hsl(0 0% 100%);
+  --color-primary:      hsl(222 47% 11%);
+  --color-primary-fg:   hsl(210 40% 98%);
+  --color-secondary:    hsl(210 40% 96%);
+  --color-secondary-fg: hsl(222 47% 11%);
+  --color-destructive:  hsl(0 84% 60%);
+  --color-destructive-fg: hsl(210 40% 98%);
+
+  --radius: 0.5rem;
+}
+
+/* Dark theme triggered by .dark class on <html> (managed by the theme store). */
+.dark {
+  --color-bg:           hsl(222 47% 7%);
+  --color-fg:           hsl(210 40% 98%);
+  --color-muted:        hsl(217 32% 17%);
+  --color-muted-fg:     hsl(215 20% 65%);
+  --color-card:         hsl(222 47% 11%);
+  --color-card-fg:      hsl(210 40% 98%);
+  --color-border:       hsl(217 32% 17%);
+  --color-input:        hsl(217 32% 17%);
+  --color-primary:      hsl(210 40% 98%);
+  --color-primary-fg:   hsl(222 47% 11%);
+  --color-secondary:    hsl(217 32% 17%);
+  --color-secondary-fg: hsl(210 40% 98%);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    @apply border-[var(--color-border)];
+  }
+  html, body, #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-[var(--color-bg)] text-[var(--color-fg)] antialiased;
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+  }
+  ::selection {
+    @apply bg-[var(--color-accent)]/30;
+  }
+}
