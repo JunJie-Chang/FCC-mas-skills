@@ -38,6 +38,7 @@ import config
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 from utils.search import fetch_full_content, search, strip_extract_boilerplate
 
 load_dotenv(override=True)
@@ -104,6 +105,7 @@ class PodcastState(TypedDict):
     articles: list[dict]     # [{"question": str, "items": [article_dict]}]
     output_path: str
     log_path: str
+    progress_cb: ProgressCb
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -398,6 +400,7 @@ def parse_instruction(state: PodcastState) -> dict:
     """
     if state.get("topic"):
         return {}
+    emit(state.get("progress_cb"), "node_start", node="parse_instruction")
 
     raw = state.get("task_instruction", "").strip()
     if not raw:
@@ -436,6 +439,8 @@ def parse_instruction(state: PodcastState) -> dict:
 
 def generate_queries(state: PodcastState) -> dict:
     """Single LLM_FAST call to generate one search query per question."""
+    emit(state.get("progress_cb"), "node_start", node="generate_queries",
+         n_questions=len(state.get("questions", [])))
     client = _get_client()
 
     questions_json = json.dumps(state["questions"], ensure_ascii=False)
@@ -472,12 +477,16 @@ def generate_queries(state: PodcastState) -> dict:
 # ── Node 2: search_and_fetch ──────────────────────────────────────────────────
 
 def search_and_fetch(state: PodcastState) -> dict:
+    cb = state.get("progress_cb")
+    emit(cb, "node_start", node="search_and_fetch",
+         n_questions=len(state.get("queries", [])))
     seen_urls: set[str] = set()
     articles_by_question: list[dict] = []
 
     for entry in state["queries"]:
         question = entry["question"]
         query    = entry["query"]
+        emit(cb, "search_query", query=query, question=question, phase="podcast")
 
         print(f"  搜尋：{query}")
         results = search(
@@ -589,6 +598,7 @@ def search_and_fetch(state: PodcastState) -> dict:
 # ── Node 3: format_output ─────────────────────────────────────────────────────
 
 def format_output(state: PodcastState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="format_output")
     topic     = state["topic"]
     intern    = state["intern_name"]
     task_date = state.get("task_date") or date.today().strftime("%Y-%m-%d")
@@ -668,6 +678,7 @@ def run(
     intern_name: Union[str, list[str]] = None,
     task_date: str = None,
     subdir: str = "weekly",
+    progress_cb: ProgressCb = None,
 ) -> dict:
     """
     Two calling paths:
@@ -686,6 +697,7 @@ def run(
         "articles":         [],
         "output_path":      "",
         "log_path":         "",
+        "progress_cb":      progress_cb,
     })
     return {
         "output_path": final_state["output_path"],

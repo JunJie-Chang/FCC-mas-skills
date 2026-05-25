@@ -296,11 +296,23 @@ def _merge_tasks_via_haiku(selected: list[PlanTask]) -> PlanTask:
 
 def confirm(tasks: list[PlanTask]) -> list[PlanTask] | None:
     """
-    Present the task list in the terminal and wait for the user to
-    confirm, edit, or cancel.
+    Present the task list and wait for the user to confirm, edit, or
+    cancel. Delegates to the active confirm strategy (CLI = stdin,
+    web = SSE bus).
 
     Returns:
         Confirmed list of PlanTask, or None if the user cancelled.
+    """
+    from utils.confirm import get_active_strategy
+    return get_active_strategy().confirm_tasks(tasks)
+
+
+def _confirm_tasks_stdin(tasks: list[PlanTask]) -> list[PlanTask] | None:
+    """
+    Interactive stdin loop — the original CLI behavior of `confirm()`.
+
+    Kept as a module-private function so `utils.confirm.StdinConfirmStrategy`
+    can delegate to it without duplicating the presentation logic.
     """
     tasks = list(tasks)
 

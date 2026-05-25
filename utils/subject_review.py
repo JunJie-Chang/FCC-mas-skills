@@ -121,16 +121,26 @@ context 規則：
 
 def review_subjects(transcript: str, mentions: list[dict]) -> str:
     """
-    Interactive CLI loop: show mentions, let user correct any. Returns the
-    (possibly modified) transcript.
+    Review STT-extracted proper nouns and apply any corrections. Delegates
+    to the active confirm strategy (CLI = stdin, web = SSE bus).
+
+    Returns the (possibly rewritten) transcript that downstream parse_tasks
+    will consume.
+    """
+    if not mentions:
+        return transcript
+    from utils.confirm import get_active_strategy
+    return get_active_strategy().review_subjects(transcript, mentions)
+
+
+def _review_subjects_stdin(transcript: str, mentions: list[dict]) -> str:
+    """
+    Original interactive CLI loop. Show mentions, let user correct any.
 
     Commands:
         [N]      — edit mention N; prompts for replacement, replace_all in transcript
         Enter    — accept all, return
     """
-    if not mentions:
-        return transcript
-
     while True:
         print()
         print("─" * 70)

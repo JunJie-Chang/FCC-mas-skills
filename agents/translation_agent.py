@@ -31,6 +31,7 @@ import config
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
@@ -48,6 +49,7 @@ class TranslationState(TypedDict):
     translation: dict   # {"body": [...]}
     output_path: str
     log_path: str
+    progress_cb: ProgressCb
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -100,6 +102,8 @@ def _read_body_file(path: str) -> str:
 
 def translate(state: TranslationState) -> dict:
     """Translate body text into Traditional Chinese; produce summary + full body."""
+    emit(state.get("progress_cb"), "node_start", node="translate",
+         n_chars=len(state.get("body_text", "")))
     client = _get_client()
 
     prompt = f"""你是一位專業的繁體中文翻譯，服務於香港金融顧問公司。
@@ -138,6 +142,7 @@ def translate(state: TranslationState) -> dict:
 # ── Node 2: format_output ─────────────────────────────────────────────────────
 
 def format_output(state: TranslationState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="format_output")
     translation = state["translation"]
     intern = state["intern_name"]
     pub_date = state.get("pub_date") or date.today().strftime("%Y-%m-%d")
@@ -200,6 +205,7 @@ def run(
     subdir: str = "daily",
     # router compat: ignored when title/body_text are provided directly
     task_instruction: str = None,
+    progress_cb: ProgressCb = None,
 ) -> dict:
     """
     Run the translation agent.
@@ -228,6 +234,7 @@ def run(
         "translation": {},
         "output_path": "",
         "log_path":    "",
+        "progress_cb": progress_cb,
     })
 
     return {

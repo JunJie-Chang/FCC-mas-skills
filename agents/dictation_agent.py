@@ -46,6 +46,7 @@ import config
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 
 load_dotenv(override=True)
 
@@ -64,6 +65,7 @@ class DictationState(TypedDict):
     minutes: dict
     output_path: str
     log_path: str
+    progress_cb: ProgressCb
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -105,16 +107,20 @@ def maybe_transcribe(state: DictationState) -> dict:
     """If audio_path is set, run STT and store result in raw_text."""
     if not state.get("audio_path"):
         return {}
+    cb = state.get("progress_cb")
+    emit(cb, "node_start", node="maybe_transcribe", audio_path=state["audio_path"])
     from utils.stt import transcribe
     print(f"  STT: transcribing {state['audio_path']} ...")
     text = transcribe(state["audio_path"])
     print(f"  STT: done ({len(text)} chars)")
+    emit(cb, "node_end", node="maybe_transcribe", n_chars=len(text))
     return {"raw_text": text}
 
 
 # ── Node 2: generate_minutes ──────────────────────────────────────────────────
 
 def generate_minutes(state: DictationState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="generate_minutes")
     client = _get_client()
 
     prompt = f"""你是 FCC Partners 的助理，負責將會議口述稿整理成正式繁體中文會議記錄。
@@ -183,6 +189,7 @@ def generate_minutes(state: DictationState) -> dict:
 # ── Node 3: format_output ─────────────────────────────────────────────────────
 
 def format_output(state: DictationState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="format_output")
     minutes = state["minutes"]
     intern = state["intern_name"]
     task_date = state.get("task_date") or date.today().strftime("%Y-%m-%d")
@@ -298,6 +305,7 @@ def run(
     override_recorder: str = "",
     task_instruction: str = None,  # router compat: treated as raw_text
     mode: str = "short",           # router compat: not used in dictation
+    progress_cb: ProgressCb = None,
 ) -> dict:
     if not raw_text and not audio_path:
         raw_text = task_instruction or ""
@@ -315,6 +323,7 @@ def run(
         "minutes":            {},
         "output_path":        "",
         "log_path":           "",
+        "progress_cb":        progress_cb,
     })
 
     return {

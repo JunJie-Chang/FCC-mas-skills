@@ -11,9 +11,26 @@ Usage in any agent:
 Print report:
     tracker.print_summary()
 
+Per-job isolation (web layer):
+    The module-level `tracker` is a proxy that dispatches to the active
+    tracker for the current thread. By default the active tracker is a
+    process-global instance — that matches the CLI's existing behavior.
+    The web layer creates a fresh CostTracker per job and binds it for
+    its worker via `use_tracker(job_tracker)`:
+
+        with use_tracker(job_tracker):
+            agent.run(...)   # all tracker.record_* calls go to job_tracker
+
+    The proxy means existing agent code (`from utils.cost_tracker import
+    tracker; tracker.record_claude(...)`) needs no changes.
+
 Prices are hardcoded constants (Anthropic / OpenAI pricing, may drift over time).
 Actual charges: check each platform's dashboard.
 """
+
+import threading
+from contextlib import contextmanager
+from typing import Iterator
 
 # ── Pricing constants ─────────────────────────────────────────────────────────
 # Claude: per 1M tokens
@@ -156,6 +173,69 @@ class CostTracker:
         print("=" * 44)
 
 
-# ── Module-level singleton ────────────────────────────────────────────────────
+# ── Active-tracker plumbing ───────────────────────────────────────────────────
 
-tracker = CostTracker()
+# Default global tracker — used by the CLI (and by any code path that hasn't
+# explicitly bound a per-job tracker). One process-wide instance, matches the
+# pre-refactor behavior.
+_default_tracker = CostTracker()
+
+# Per-thread override. The web layer creates a CostTracker per job and binds it
+# for the worker thread that runs the agent. CLI never sets this.
+_local = threading.local()
+
+
+def get_active_tracker() -> CostTracker:
+    """Return the tracker bound to the current thread, or the default."""
+    t = getattr(_local, "tracker", None)
+    return t if t is not None else _default_tracker
+
+
+@contextmanager
+def use_tracker(t: CostTracker) -> Iterator[CostTracker]:
+    """
+    Bind `t` as the active tracker for the duration of the with-block.
+
+    Used by the web job runner to isolate cost accounting per job:
+
+        job_tracker = CostTracker()
+        with use_tracker(job_tracker):
+            agent.run(...)
+        cost_usd = job_tracker.total_usd()
+
+    Nested binds are supported (previous active tracker is restored on exit).
+    """
+    previous = getattr(_local, "tracker", None)
+    _local.tracker = t
+    try:
+        yield t
+    finally:
+        _local.tracker = previous
+
+
+class _TrackerProxy:
+    """
+    Module-level proxy that forwards every attribute access to the active
+    tracker. Preserves the existing import pattern:
+
+        from utils.cost_tracker import tracker
+        tracker.record_claude(model, in_tok, out_tok)
+
+    Without the proxy, this would capture a reference to the default tracker
+    at import time, and per-job binds via `use_tracker(...)` would have no
+    effect on already-imported callers.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(get_active_tracker(), name)
+
+    def __setattr__(self, name: str, value) -> None:
+        # Disallow rebinding state on the proxy itself — set state on the
+        # underlying tracker if that's the intent.
+        setattr(get_active_tracker(), name, value)
+
+    def __repr__(self) -> str:
+        return f"<TrackerProxy active={get_active_tracker()!r}>"
+
+
+tracker = _TrackerProxy()

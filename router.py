@@ -6,6 +6,7 @@ Unfinished agents raise NotImplementedError with a clear message.
 """
 from typing import Union
 from utils.planner import PlanTask
+from utils.progress import ProgressCb
 
 
 _AGENT_DEFAULT_SUBDIR = {
@@ -21,6 +22,7 @@ def dispatch(
     task_date: str = None,
     subdir: str = None,
     mode: str = "short",
+    progress_cb: ProgressCb = None,
 ) -> dict:
     """
     Route a confirmed PlanTask to its agent and return the result.
@@ -32,6 +34,10 @@ def dispatch(
         subdir:      Output subfolder — 'daily', 'weekly', or 'adhoc'.
                      When None, each agent_type uses its own default
                      (translation→daily, podcast/speech_ppt→weekly, others→adhoc).
+        progress_cb: Optional callback for structured progress events.
+                     CLI path leaves this as None — existing print()
+                     output is unchanged. Web layer passes a callback
+                     that publishes to its SSE bus.
 
     Returns:
         dict with at least 'output_path' and 'log_path'.
@@ -44,6 +50,7 @@ def dispatch(
         task_date        = task_date,
         subdir           = resolved_subdir,
         mode             = mode,
+        progress_cb      = progress_cb,
     )
 
     agent_type = task.agent_type
@@ -72,6 +79,7 @@ def dispatch(
                 pub_date=parsed.get("pub_date"),
                 task_date=task_date,
                 subdir=resolved_subdir,
+                progress_cb=progress_cb,
             )
         except Exception:
             raise ValueError(
@@ -93,6 +101,7 @@ def dispatch(
             intern_name=intern_name,
             task_date=task_date,
             subdir=resolved_subdir,
+            progress_cb=progress_cb,
         )
 
     elif agent_type == "podcast":
@@ -102,6 +111,7 @@ def dispatch(
             intern_name=intern_name,
             task_date=task_date,
             subdir=resolved_subdir,
+            progress_cb=progress_cb,
         )
 
     else:

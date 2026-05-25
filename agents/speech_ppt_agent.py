@@ -43,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import config
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 
 load_dotenv(override=True)
 
@@ -171,6 +172,7 @@ class SpeechPPTState(TypedDict):
     confirmed: bool
     output_path: str
     log_path: str
+    progress_cb: ProgressCb
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -224,6 +226,7 @@ def parse_script(state: SpeechPPTState) -> dict:
       {"type": "unstructured", "title": str, "notes": str}
     Also derives speech_topic if not already set.
     """
+    emit(state.get("progress_cb"), "node_start", node="parse_script")
     client = _get_anthropic()
     transcript = state["raw_transcript"]
     topic = state.get("speech_topic", "") or ""
@@ -286,18 +289,30 @@ def parse_script(state: SpeechPPTState) -> dict:
 
 def confirm_slides(state: SpeechPPTState) -> dict:
     """
-    Show slide plan and wait for CLI confirmation before generating images.
-    User must confirm before DALL-E costs are incurred.
+    Show slide plan and wait for confirmation before generating images.
+    Delegates to the active confirm strategy (CLI = stdin, web = SSE bus).
     """
-    slides = state["slides_plan"]
-    topic = state["speech_topic"]
-    do_images = state.get("generate_images", True)
+    emit(state.get("progress_cb"), "node_start", node="confirm_slides")
+    from utils.confirm import get_active_strategy
+    proceed = get_active_strategy().confirm_slides(
+        slides_plan=state["slides_plan"],
+        topic=state["speech_topic"],
+        generate_images=state.get("generate_images", True),
+    )
+    return {"confirmed": bool(proceed)}
 
-    structured = [s for s in slides if s.get("type") == "structured"]
-    unstructured = [s for s in slides if s.get("type") != "structured"]
+
+def _confirm_slides_stdin(slides_plan: list[dict], topic: str,
+                          generate_images: bool) -> bool:
+    """
+    Original interactive CLI confirm. Prints the slide plan + DALL-E cost
+    preview, prompts y/n. Returns True to proceed, False to cancel.
+    """
+    structured = [s for s in slides_plan if s.get("type") == "structured"]
+    unstructured = [s for s in slides_plan if s.get("type") != "structured"]
 
     print(f"\n── Speech PPT 計劃：{topic} {'─' * 28}")
-    for i, slide in enumerate(slides, 1):
+    for i, slide in enumerate(slides_plan, 1):
         tag = "結構化" if slide.get("type") == "structured" else "非結構"
         print(f"\n  [{i}]  {tag}  {slide['title']}")
         if slide.get("type") == "structured":
@@ -311,18 +326,18 @@ def confirm_slides(state: SpeechPPTState) -> dict:
             if len(lines) > 3:
                 print(f"         📝 ...")
 
-    img_note = f"，將生成 {len(structured)} 張 DALL-E 圖片" if do_images and structured else ""
-    print(f"\n  共 {len(slides)} 張：{len(structured)} 結構化（生成 PPT{img_note}）"
+    img_note = f"，將生成 {len(structured)} 張 DALL-E 圖片" if generate_images and structured else ""
+    print(f"\n  共 {len(slides_plan)} 張：{len(structured)} 結構化（生成 PPT{img_note}）"
           f"、{len(unstructured)} 非結構（僅回傳 notes）")
     print("─" * 50)
 
     while True:
         ans = input("確認執行？(y = 確認 / n = 取消)：").strip().lower()
         if ans in ("y", "yes", ""):
-            return {"confirmed": True}
+            return True
         if ans in ("n", "no"):
             print("已取消。")
-            return {"confirmed": False}
+            return False
         print("請輸入 y 或 n。")
 
 
@@ -336,6 +351,7 @@ def generate_images(state: SpeechPPTState) -> dict:
     """Generate DALL-E 3 images for structured slides; skip unstructured."""
     if not state.get("generate_images", True):
         return {}
+    emit(state.get("progress_cb"), "node_start", node="generate_images")
 
     client = _get_openai()
     slides = state["slides_plan"]
@@ -391,6 +407,7 @@ def build_ppt(state: SpeechPPTState) -> dict:
     Build PPTX for structured slides.
     Print notes for unstructured slides and append to .log sidecar.
     """
+    emit(state.get("progress_cb"), "node_start", node="build_ppt")
     from pptx import Presentation
     from pptx.util import Pt, Emu
     from pptx.dml.color import RGBColor
@@ -538,6 +555,7 @@ def run(
     subdir: str = "weekly",
     generate_images: bool = True,
     mode: str = "short",
+    progress_cb: ProgressCb = None,
 ) -> dict:
     """
     Generate a speech PPT from CY's transcript.
@@ -568,6 +586,7 @@ def run(
         "confirmed":       False,
         "output_path":     "",
         "log_path":        "",
+        "progress_cb":     progress_cb,
     })
 
     if not final_state.get("output_path"):

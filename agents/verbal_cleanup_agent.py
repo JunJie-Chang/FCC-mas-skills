@@ -33,6 +33,7 @@ import config
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 
 load_dotenv(override=True)
 
@@ -49,6 +50,7 @@ class VerbalCleanupState(TypedDict):
     cleaned: dict       # {title, sections: [{heading?, paragraphs: [str]}]}
     output_path: str
     log_path: str
+    progress_cb: ProgressCb
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -90,6 +92,8 @@ def maybe_transcribe(state: VerbalCleanupState) -> dict:
     """If audio_path is set, run STT then let the user review and correct before cleanup."""
     if not state.get("audio_path"):
         return {}
+    cb = state.get("progress_cb")
+    emit(cb, "node_start", node="maybe_transcribe", audio_path=state["audio_path"])
     from utils.stt import transcribe
     print(f"  STT: transcribing {state['audio_path']} ...")
     text = transcribe(state["audio_path"])
@@ -109,6 +113,8 @@ def maybe_transcribe(state: VerbalCleanupState) -> dict:
 # ── Node 2: cleanup_text ──────────────────────────────────────────────────────
 
 def cleanup_text(state: VerbalCleanupState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="cleanup_text",
+         n_chars=len(state.get("raw_text", "")))
     client = _get_client()
 
     prompt = f"""你是 FCC Partners 的助理，負責將口述錄音的文字稿清稿成乾淨的繁體中文書面稿。
@@ -161,6 +167,7 @@ def cleanup_text(state: VerbalCleanupState) -> dict:
 # ── Node 3: format_output ─────────────────────────────────────────────────────
 
 def format_output(state: VerbalCleanupState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="format_output")
     cleaned = state["cleaned"]
     intern = state["intern_name"]
     task_date = state.get("task_date") or date.today().strftime("%Y-%m-%d")
@@ -215,6 +222,7 @@ def run(
     subdir: str = "adhoc",
     task_instruction: str = None,  # router compat: treated as raw_text
     mode: str = "short",           # router compat: not used here
+    progress_cb: ProgressCb = None,
 ) -> dict:
     if not raw_text and not audio_path:
         raw_text = task_instruction or ""
@@ -231,6 +239,7 @@ def run(
         "cleaned":     {},
         "output_path": "",
         "log_path":    "",
+        "progress_cb": progress_cb,
     })
 
     return {

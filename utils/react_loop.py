@@ -4,6 +4,10 @@ utils/react_loop.py — Shared ReAct (plan-and-execute) loop for research agents
 Used by company_info_agent and person_info_agent. Each agent's LangGraph state
 must contain: task_instruction, todos, evidence, round, search_queries, search_results.
 
+Optional state["progress_cb"] (utils.progress.ProgressCb) receives structured
+events at meaningful boundaries (search_batch, search_query, evaluate). When
+absent (CLI path), only the existing print() output appears.
+
 Node functions are plain callables; agents wrap them in thin typed stubs so that
 LangGraph gets the correct TypedDict annotation per agent.
 
@@ -28,6 +32,7 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 import config
+from utils.progress import emit
 
 RESULTS_PER_QUERY    = 3
 STALL_ROUNDS         = 2
@@ -99,14 +104,17 @@ def run_initial_search(state: dict) -> dict:
     from utils.search import search
     from utils.cost_tracker import tracker
 
+    cb = state.get("progress_cb")
+    queries = [q for q in state.get("search_queries", []) if q]
+    emit(cb, "search_batch", n_queries=len(queries))
+
     all_results = []
-    for query in state.get("search_queries", []):
-        if not query:
-            continue
+    for query in queries:
         results = search(query, max_results=RESULTS_PER_QUERY)
         tracker.record_tavily(1)
         results = _enrich_with_fulltext(results)
         all_results.append({"query": query, "results": results})
+        emit(cb, "search_query", query=query, n_results=len(results), phase="initial")
 
     accumulated = list(state.get("evidence", [])) + all_results
     return {"search_results": accumulated, "evidence": accumulated}
@@ -187,6 +195,7 @@ def execute_search(state: dict) -> dict:
     from utils.search import search
     from utils.cost_tracker import tracker
 
+    cb = state.get("progress_cb")
     queries = state.get("search_queries", [])
     if not queries or not queries[0]:
         return {"round": state["round"] + 1}
@@ -195,6 +204,8 @@ def execute_search(state: dict) -> dict:
     results = search(query, max_results=RESULTS_PER_QUERY)
     tracker.record_tavily(1)
     results = _enrich_with_fulltext(results)
+    emit(cb, "search_query", query=query, n_results=len(results),
+         phase="loop", round=state["round"] + 1)
 
     new_entry  = {"query": query, "results": results}
     accumulated = list(state["evidence"]) + [new_entry]
@@ -269,6 +280,12 @@ def evaluate(state: dict) -> dict:
         if new_attempts >= 2 and new_status == "pending":
             new_status = "unresolved"
         updated_todos.append({**t, "status": new_status, "attempts": new_attempts})
+
+    counts = {"done": 0, "pending": 0, "unresolved": 0}
+    for t in updated_todos:
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+    emit(state.get("progress_cb"), "evaluate",
+         round=state.get("round", 0), **counts)
 
     return {"todos": updated_todos}
 

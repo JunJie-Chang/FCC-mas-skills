@@ -30,6 +30,7 @@ import utils.react_loop as react_loop
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 
 load_dotenv(override=True)
 
@@ -58,6 +59,9 @@ class CompanyInfoState(TypedDict):
     report: dict                           # {title, sections:[{heading,type,items|content}]}
     output_path: str
     log_path: str
+    # Optional callback for progress events (web layer). CLI path leaves
+    # this as None — emit() is a no-op when the callback is missing.
+    progress_cb: ProgressCb
 
 
 # ── LLM client ────────────────────────────────────────────────────────────────
@@ -104,6 +108,7 @@ def parse_task(state: CompanyInfoState) -> dict:
     Each todo is a specific question / fact to find.
     Also generate the first batch of search queries.
     """
+    emit(state.get("progress_cb"), "node_start", node="parse_task")
     client = _get_client()
 
     prompt = f"""{config.time_context()}
@@ -165,15 +170,22 @@ def parse_task(state: CompanyInfoState) -> dict:
 # ── ReAct loop nodes (thin wrappers over utils/react_loop) ───────────────────
 
 def run_search(state: CompanyInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="run_search")
     return react_loop.run_initial_search(state)
 
 def next_action(state: CompanyInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="next_action",
+         round=state.get("round", 0))
     return react_loop.next_action(state, max_rounds=_MAX_ROUNDS, search_hint=_COMPANY_SEARCH_HINT)
 
 def execute_search(state: CompanyInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="execute_search",
+         round=state.get("round", 0))
     return react_loop.execute_search(state)
 
 def evaluate(state: CompanyInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="evaluate",
+         round=state.get("round", 0))
     return react_loop.evaluate(state)
 
 def _should_continue(state: CompanyInfoState) -> str:
@@ -189,6 +201,7 @@ def check_financial_need(state: CompanyInfoState) -> dict:
     Q2: Which financial tools are needed? (subset of TOOL_REGISTRY keys, or [])
     Both must be Y/non-empty to trigger fetch_financial_data.
     """
+    emit(state.get("progress_cb"), "node_start", node="check_financial_need")
     from utils.financial_tools import YFINANCE_TOOL_DESCRIPTIONS, SECTOR_TOOL_DESCRIPTIONS
 
     yf_menu = "\n".join(f'- "{tid}": {desc}' for tid, desc in YFINANCE_TOOL_DESCRIPTIONS.items())
@@ -276,7 +289,8 @@ def check_financial_need(state: CompanyInfoState) -> dict:
 def fetch_financial_data(state: CompanyInfoState) -> dict:
     """
     Resolve tickers (multi) and fetch financial data for each, per requested tools.
-    Skipped entirely (via conditional edge) when Q1=N or Q2=[].
+    Skipped entirely (via conditional edge) when Q1=N or Q2=[]; progress_cb
+    emit happens here only when this node actually runs.
 
     Resolution order:
       1. `tickers` list from check_financial_need — direct path, only format-validated
@@ -289,6 +303,7 @@ def fetch_financial_data(state: CompanyInfoState) -> dict:
     or, when nothing resolves:
         {"_ticker_error": "...", "_resolve_failed": [...]}
     """
+    emit(state.get("progress_cb"), "node_start", node="fetch_financial_data")
     from utils.financial_tools import (
         _canonicalize_ticker, _is_valid_ticker_format, fetch_all, resolve_ticker,
     )
@@ -350,6 +365,7 @@ def fetch_sector_data(state: CompanyInfoState) -> dict:
     Run FinanceDatabase sector scan based on Q3 classification.
     No-op (returns empty dict) when Q3.needed != "Y".
     """
+    emit(state.get("progress_cb"), "node_start", node="fetch_sector_data")
     q3 = state.get("financial_check", {}).get("q3", {})
     if q3.get("needed") != "Y" or not q3.get("sector"):
         return {"sector_data": {}}
@@ -368,6 +384,7 @@ def extract_numbers_node(state: CompanyInfoState) -> dict:
     via utils/unit_convert. The synthesizer is then told to echo those strings
     verbatim — removing LLM from the unit-conversion step.
     """
+    emit(state.get("progress_cb"), "node_start", node="extract_numbers")
     from utils.number_extract import extract_numbers
 
     # Pass through high-confidence subject info parsed earlier by
@@ -400,6 +417,7 @@ def verify_node(state: CompanyInfoState) -> dict:
     deliverables — neutralizing the LLM's helpfulness-driven habit of
     paraphrasing adjacent evidence to fill gaps (issues #7, #4, #19).
     """
+    emit(state.get("progress_cb"), "node_start", node="verify")
     from utils.premise_validate import validate
 
     validation = validate(
@@ -416,6 +434,8 @@ def generate_report(state: CompanyInfoState) -> dict:
     Use claude-opus to synthesize search results into a structured JSON report.
     Schema (sections and types) is decided dynamically by the model.
     """
+    emit(state.get("progress_cb"), "node_start", node="generate_report",
+         mode=state.get("mode", "short"))
     client = _get_client()
 
     # Flatten search results into readable context.
@@ -551,6 +571,7 @@ def format_output(state: CompanyInfoState) -> dict:
     """
     Render the report JSON into a Word document and write the source log.
     """
+    emit(state.get("progress_cb"), "node_start", node="format_output")
     report = state["report"]
     intern = state["intern_name"]
     task_date = state.get("task_date") or date.today().strftime("%Y-%m-%d")
@@ -590,6 +611,8 @@ def format_output(state: CompanyInfoState) -> dict:
         logger.add_validation(state["validation"])
     log_path = logger.save(output_path)
 
+    emit(state.get("progress_cb"), "node_end", node="format_output",
+         output_path=str(output_path), log_path=str(log_path))
     return {
         "output_path": str(output_path),
         "log_path": str(log_path),
@@ -657,6 +680,7 @@ def run(
     task_date: str = None,
     subdir: str = "adhoc",
     mode: str = "short",
+    progress_cb: ProgressCb = None,
 ) -> dict:
     """
     Run the company_info agent end-to-end.
@@ -667,6 +691,13 @@ def run(
         intern_name:      Name(s) for file naming. Defaults to config default.
         task_date:        Date string YYYY-MM-DD. Defaults to today.
         subdir:           Output subfolder — 'daily', 'weekly', or 'adhoc'.
+        mode:             "short" (default) or "medium" — affects synth model
+                          and prompt rules.
+        progress_cb:      Optional callable invoked at node boundaries with
+                          structured event dicts. CLI path leaves this as
+                          None — the existing print() output is unchanged.
+                          The web layer supplies a callback that publishes
+                          to the SSE bus.
 
     Returns:
         dict with keys 'output_path' and 'log_path'.
@@ -693,6 +724,7 @@ def run(
         "report": {},
         "output_path": "",
         "log_path": "",
+        "progress_cb": progress_cb,
     }
 
     final_state = app.invoke(initial_state)

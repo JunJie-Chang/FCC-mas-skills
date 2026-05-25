@@ -29,6 +29,7 @@ import utils.react_loop as react_loop
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
+from utils.progress import ProgressCb, emit
 
 load_dotenv(override=True)
 
@@ -52,6 +53,7 @@ class PersonInfoState(TypedDict):
     report: dict
     output_path: str
     log_path: str
+    progress_cb: ProgressCb
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -82,6 +84,7 @@ _MAX_ROUNDS = 5
 
 def parse_task(state: PersonInfoState) -> dict:
     """Build a research plan (todo list) and initial search queries for person research."""
+    emit(state.get("progress_cb"), "node_start", node="parse_task")
     client = _get_client()
 
     prompt = f"""{config.time_context()}
@@ -148,15 +151,22 @@ _PERSON_SEARCH_HINT = (
 # ── ReAct loop nodes (thin wrappers over utils/react_loop) ───────────────────
 
 def run_search(state: PersonInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="run_search")
     return react_loop.run_initial_search(state)
 
 def next_action(state: PersonInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="next_action",
+         round=state.get("round", 0))
     return react_loop.next_action(state, max_rounds=_MAX_ROUNDS, search_hint=_PERSON_SEARCH_HINT)
 
 def execute_search(state: PersonInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="execute_search",
+         round=state.get("round", 0))
     return react_loop.execute_search(state)
 
 def evaluate(state: PersonInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="evaluate",
+         round=state.get("round", 0))
     return react_loop.evaluate(state)
 
 def _should_continue(state: PersonInfoState) -> str:
@@ -167,6 +177,7 @@ def _should_continue(state: PersonInfoState) -> str:
 
 def extract_numbers_node(state: PersonInfoState) -> dict:
     """Haiku echo task-relevant numbers → Python deterministic Chinese conversion."""
+    emit(state.get("progress_cb"), "node_start", node="extract_numbers")
     from utils.number_extract import extract_numbers
 
     items, numbers_zh = extract_numbers(
@@ -182,6 +193,7 @@ def verify_node(state: PersonInfoState) -> dict:
     """Decompose instruction into premises + deliverables and stamp each with
     an evidence-grounded status. Forces synthesizer to mark unverified
     premises and missing deliverables explicitly (issue #19)."""
+    emit(state.get("progress_cb"), "node_start", node="verify")
     from utils.premise_validate import validate
 
     validation = validate(
@@ -195,6 +207,8 @@ def verify_node(state: PersonInfoState) -> dict:
 
 def generate_report(state: PersonInfoState) -> dict:
     """Synthesize search results into a person profile structured by affiliation."""
+    emit(state.get("progress_cb"), "node_start", node="generate_report",
+         mode=state.get("mode", "short"))
     client = _get_client()
 
     context_parts = []
@@ -301,6 +315,7 @@ JSON 格式：
 # ── Node 4: format_output ─────────────────────────────────────────────────────
 
 def format_output(state: PersonInfoState) -> dict:
+    emit(state.get("progress_cb"), "node_start", node="format_output")
     report = state["report"]
     intern = state["intern_name"]
     task_date = state.get("task_date") or date.today().strftime("%Y-%m-%d")
@@ -375,6 +390,7 @@ def run(
     task_date: str = None,
     subdir: str = "adhoc",
     mode: str = "short",
+    progress_cb: ProgressCb = None,
 ) -> dict:
     app = build_graph()
 
@@ -395,6 +411,7 @@ def run(
         "report": {},
         "output_path": "",
         "log_path": "",
+        "progress_cb": progress_cb,
     })
 
     return {
