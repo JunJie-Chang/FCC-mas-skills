@@ -209,6 +209,34 @@ def _haiku_normalize_ticker(
 公司候選：{company_name}
 任務內容：{task_context or '(無)'}
 
+【硬規則 — 任務必須有金融意圖才回 ticker】
+
+主流程：先看「公司候選 + 任務內容」是否確實在問**市場 / 財務數字**。
+- 是 → 解析 ticker（按下方中文意譯規則）
+- 否 → ticker=null，不需再思考
+
+判定「金融意圖」由你判斷，不限關鍵字。下列為**示範**：
+
+✓ 有金融意圖（回 ticker）：
+   「Apple 最新一季財報營收」→ AAPL（明確問財報）
+   「NVDA 股價走勢與市值」→ NVDA（股價 / 市值）
+   「台積電 2026 Q1 財報數字」→ 2330.TW（季報數字）
+   「比較 GME 跟 EBAY 市值」→ 各家 ticker（市值比較）
+   「Tesla 估值合理嗎」→ TSLA（估值）
+
+❌ 無金融意圖（回 null，即使主體可能是上市公司）：
+   「查 Money & You 的基本資訊」→ null（主體像課程 / 純業務）
+   「介紹 BNI 商會」→ null（商會）
+   「林偉賢的背景」→ null（人物）
+   「AIGC實戰營是什麼」→ null（課程）
+   「查 Apple 公司業務狀況」→ null（純業務面，沒問任何財務數字）
+   「介紹台積電的越南設廠進度」→ null（業務佈局，不是市場資料）
+
+判斷重點：任務在問「市場 / 財務數字」還是「業務 / 背景介紹」？前者才 return ticker。
+
+【硬規則 — 任務內容為空時】
+若「任務內容」欄位是 '(無)' 或空字串，無法判金融意圖，ticker=null。
+
 【硬規則 — 中文公司名不得意譯】
 - 不要把中文公司名拆字翻成英文常見字後，去找「碰巧同名」的英文公司
   ❌ 「巨漢」→ Giant → 誤對應「巨大機械 9921 Giant Bicycles」（巨漢實際為 6903 巨漢系統科技）
@@ -246,11 +274,14 @@ def _haiku_normalize_ticker(
 
         text = message.content[0].text.strip()
         text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text).strip()
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            text = m.group(0)
-        data = _json.loads(text)
+        # Haiku tends to add a `**判斷說明：**` prose block after the JSON;
+        # use raw_decode so it parses one complete JSON value and ignores
+        # everything trailing (greedy `re.search(r"\{[\s\S]*\}", ...)`
+        # over-matched into the explanation and broke parsing intermittently).
+        idx = text.find("{")
+        if idx < 0:
+            return None
+        data, _ = _json.JSONDecoder().raw_decode(text[idx:])
         ticker = data.get("ticker")
         confidence = data.get("confidence", "low")
         if not ticker:
