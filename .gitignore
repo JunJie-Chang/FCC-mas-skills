@@ -11,6 +11,12 @@ __pycache__/
 # Output files
 output/
 
+# Web layer — SQLite + transient generated assets
+web/api/data/*.db
+web/api/data/*.db-journal
+web/api/data/*.db-wal
+web/api/data/*.db-shm
+
 # macOS
 .DS_Store
 
