@@ -1,52 +1,91 @@
 /**
- * /new-podcast — structured Podcast research submission.
+ * /new-podcast — Podcast research submission.
  *
- * Podcast tasks have a fixed shape: one topic + N questions. The
- * underlying agent (agents/podcast_agent.py) still runs Haiku in its
- * `parse_instruction` node to extract topic/questions from free text,
- * but pre-structuring at the form makes the user's intent explicit
- * (no semicolon-separated typos, no "and also..." parsing surprises).
+ * The realistic input flow at FCC: someone forwards a chunk of text
+ * with a topic header and a numbered question list:
  *
- * Submits with type="podcast" and instruction formatted as:
- *
- *     主題：{topic}
- *     問題：
- *     1. {q1}
- *     2. {q2}
+ *     Podcast: 張雪機車
+ *     1. 中國機車最近震撼全球…
+ *     2. WSBK 過去長期由歐洲與日本品牌主導…
  *     ...
  *
- * which podcast_agent.parse_instruction handles natively.
+ * Rather than make the user re-type each question into separate
+ * inputs, we accept the raw block and pass it straight through —
+ * podcast_agent.parse_instruction (Haiku) already extracts topic +
+ * questions from arbitrary text shapes. We do a quick client-side
+ * regex pass purely to show "已偵測：1 主題 + N 題" feedback so the
+ * user can sanity-check the parse before submitting.
  */
-import { useFieldArray, useForm } from "react-hook-form"
+import { useMemo, useState } from "react"
+import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { useNavigate } from "@tanstack/react-router"
-import { useState } from "react"
 import { useCreateJob } from "@/api/hooks"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import {
-  AlertCircle, Loader2, Plus, Send, Trash2,
-} from "lucide-react"
+import { AlertCircle, AlertTriangle, CheckCircle2, Loader2, Send } from "lucide-react"
 
 const schema = z.object({
-  topic:       z.string().min(1, "主題必填").max(200),
+  instruction: z.string().min(10, "請貼上完整主題與問題").max(20_000),
   intern_name: z.string().min(1).max(128),
-  questions:   z.array(z.object({ text: z.string().min(1, "問題不能空") }))
-                .min(1, "至少一條問題")
-                .max(8, "最多 8 條（更多請拆兩個 job）"),
 })
 
 type FormValues = z.infer<typeof schema>
 
-function formatInstruction(topic: string, qs: string[]): string {
-  const lines = [`主題：${topic}`, "問題："]
-  qs.forEach((q, i) => lines.push(`${i + 1}. ${q.trim()}`))
-  return lines.join("\n")
+
+/**
+ * Light client-side parse just for UI feedback. Doesn't gate submit —
+ * the source of truth is the agent's Haiku parser; this is purely a
+ * "did we paste something sensible" sanity check.
+ *
+ * Heuristics:
+ *   - Topic line: starts with "Podcast"/"主題"/"題目" (any case) OR
+ *     is just a short first non-empty line followed by numbered items
+ *   - Questions: lines starting with "1." / "2." / "(1)" / "1、" etc.
+ *
+ * Failure mode is OK — if it can't detect, we show 0/0 and let the
+ * user submit anyway (agent will parse).
+ */
+function detectStructure(text: string): { topic: string; questionCount: number } {
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean)
+  if (lines.length === 0) return { topic: "", questionCount: 0 }
+
+  // Topic detection: explicit prefix, else first short non-numbered line.
+  let topic = ""
+  for (const line of lines) {
+    const m = line.match(/^(?:podcast|主題|題目|topic)\s*[:：]\s*(.+)$/i)
+    if (m && m[1]) {
+      topic = m[1].trim()
+      break
+    }
+  }
+  if (!topic && lines[0]) {
+    // Fallback: first line if it isn't itself a numbered question
+    if (!/^\s*(?:\d+[.、)）]|\(\d+\))/.test(lines[0]) && lines[0].length <= 100) {
+      topic = lines[0]
+    }
+  }
+
+  // Count numbered question lines. Tolerate `1.` / `1、` / `1)` /
+  // `(1)` / `1．` (full-width).
+  const questionCount = lines.filter((l) =>
+    /^\s*(?:\d+[.、)．）]|\(\d+\))\s+\S/.test(l)
+  ).length
+
+  return { topic, questionCount }
 }
+
+
+const EXAMPLE_PLACEHOLDER = `Podcast: 張雪機車
+1. 中國機車最近震撼全球，張雪機車最近連奪 5 個國際機車大賽冠軍，請說明其驚人紀錄
+2. WSBK 過去長期由歐洲與日本品牌主導，為何張雪機車這次奪冠⋯
+3. ⋯`
+
 
 export function NewPodcastPage() {
   const navigate = useNavigate()
@@ -56,21 +95,21 @@ export function NewPodcastPage() {
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
     defaultValues: {
-      topic:       "",
+      instruction: "",
       intern_name: "Justin",
-      questions:   [{ text: "" }, { text: "" }, { text: "" }],
     },
   })
-  const { register, handleSubmit, control, formState: { errors } } = form
-  const { fields, append, remove } = useFieldArray({ control, name: "questions" })
+  const { register, handleSubmit, watch, formState: { errors } } = form
+
+  const instructionText = watch("instruction")
+  const detected = useMemo(() => detectStructure(instructionText), [instructionText])
 
   const onSubmit = handleSubmit(async (v) => {
     setSubmitError(null)
-    const instruction = formatInstruction(v.topic, v.questions.map((q) => q.text))
     try {
       const job = await create.mutateAsync({
         type:        "podcast",
-        instruction,
+        instruction: v.instruction,
         intern_name: v.intern_name,
         mode:        "short",   // podcast agent ignores mode but the API requires it
         extra:       {},
@@ -86,7 +125,7 @@ export function NewPodcastPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Podcast 任務</h1>
         <p className="text-sm text-[var(--color-muted-fg)] mt-1">
-          一個主題 + N 個子問題。Agent 會為每題搜 3 篇一手新聞，逐篇翻譯與整理。
+          直接貼上主題 + 編號問題清單。Agent 會為每題搜 3 篇一手新聞，逐篇翻譯整理。
         </p>
       </div>
 
@@ -101,73 +140,34 @@ export function NewPodcastPage() {
       <form onSubmit={onSubmit} className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">主題</CardTitle>
-            <CardDescription>用一句話描述本次 podcast 的主軸。</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Input
-              placeholder="例：全球媒體產業 / 台灣半導體 AI 深水區 / K-pop 商業模式"
-              {...register("topic")}
-            />
-            {errors.topic && (
-              <p className="text-xs text-[var(--color-destructive)] mt-2">{errors.topic.message}</p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">問題（{fields.length}）</CardTitle>
+            <CardTitle className="text-base">任務內容</CardTitle>
             <CardDescription>
-              每題各自會搜 3 篇報導。最多 8 條 — 想做更多可拆成兩個 job。
+              將整段「主題 + 編號問題」貼進來。常見格式：第一行寫
+              <code className="px-1 mx-0.5 text-xs">Podcast: 主題</code>，接著
+              <code className="px-1 mx-0.5 text-xs">1. 問題</code>
+              <code className="px-1 mx-0.5 text-xs">2. 問題</code> ⋯
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {fields.map((field, idx) => (
-              <div key={field.id} className="flex items-start gap-2">
-                <span className="w-6 h-9 flex items-center justify-center text-sm text-[var(--color-muted-fg)] tabular-nums shrink-0">
-                  {idx + 1}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <Input
-                    placeholder={`問題 ${idx + 1}`}
-                    {...register(`questions.${idx}.text` as const)}
-                  />
-                  {errors.questions?.[idx]?.text && (
-                    <p className="text-xs text-[var(--color-destructive)] mt-1">
-                      {errors.questions[idx]?.text?.message}
-                    </p>
-                  )}
-                </div>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9 shrink-0"
-                  onClick={() => remove(idx)}
-                  disabled={fields.length === 1}
-                  aria-label="刪除問題"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            ))}
+            <Textarea
+              {...register("instruction")}
+              placeholder={EXAMPLE_PLACEHOLDER}
+              className="min-h-[280px] font-sans leading-relaxed"
+            />
 
-            {typeof errors.questions?.message === "string" && (
-              <p className="text-xs text-[var(--color-destructive)]">{errors.questions.message}</p>
+            {/* Live detection feedback — purely informational, not a gate */}
+            {instructionText.trim().length > 0 && (
+              <ParseFeedback
+                topic={detected.topic}
+                questionCount={detected.questionCount}
+              />
             )}
 
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => append({ text: "" })}
-              disabled={fields.length >= 8}
-              className="w-full"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              新增問題
-            </Button>
+            {errors.instruction && (
+              <p className="text-xs text-[var(--color-destructive)]">
+                {errors.instruction.message}
+              </p>
+            )}
           </CardContent>
         </Card>
 
@@ -193,6 +193,44 @@ export function NewPodcastPage() {
           </Button>
         </div>
       </form>
+    </div>
+  )
+}
+
+
+/**
+ * Inline strip showing what the client-side regex detected. Green when
+ * we see both a topic AND at least one numbered question; amber-ish
+ * warning when one of them is missing (user can still submit — the
+ * agent's Haiku is more forgiving than our regex).
+ */
+function ParseFeedback({
+  topic, questionCount,
+}: { topic: string; questionCount: number }) {
+  const looksGood = topic.length > 0 && questionCount > 0
+
+  if (looksGood) {
+    return (
+      <div className="flex items-start gap-2 text-xs text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 rounded-md px-3 py-2">
+        <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+        <div>
+          <div>偵測到 <strong>{questionCount}</strong> 題，主題：「{topic}」</div>
+          <div className="text-[var(--color-muted-fg)] mt-0.5">
+            送出後 Haiku 會再次確認；偶有偵測差一兩題屬正常。
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-500/10 rounded-md px-3 py-2">
+      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+      <div>
+        {!topic && !questionCount && "沒偵測到主題或編號問題。仍可送出 — agent 會自己解析；但確認格式有點像範例的話比較不會跑偏。"}
+        {topic && !questionCount && `主題已抓到（「${topic}」），但沒看到編號問題行（1. / 2. / …）`}
+        {!topic && questionCount > 0 && `偵測到 ${questionCount} 題，但沒抓到主題行（可加一行「Podcast: XXX」）`}
+      </div>
     </div>
   )
 }
