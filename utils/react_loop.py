@@ -62,8 +62,13 @@ def _enrich_with_fulltext(results: list[dict]) -> list[dict]:
     and attach it as `full_content`. Failures are silent (snippet remains).
     Results retain their original snippet content; consumers should prefer
     `full_content` when non-empty and fall back to `content`.
+
+    Tavily extract returns raw page markdown (nav menus, link lists,
+    recommended-reading columns) on top of the article body. Each fetched
+    text is run through `strip_extract_boilerplate` before being capped,
+    so downstream evidence and Numbers Layer don't ingest page chrome.
     """
-    from utils.search import fetch_full_content_parallel
+    from utils.search import fetch_full_content_parallel, strip_extract_boilerplate
 
     if not results:
         return results
@@ -74,8 +79,12 @@ def _enrich_with_fulltext(results: list[dict]) -> list[dict]:
 
     for r in results:
         text = fetched.get(r.get("url", ""))
-        if text:
-            r["full_content"] = text[:FULLTEXT_CHAR_CAP]
+        if not text:
+            continue
+        cleaned, n_dropped = strip_extract_boilerplate(text)
+        if n_dropped:
+            print(f"    [clean] dropped {n_dropped} boilerplate line(s) from {r.get('url', '')}")
+        r["full_content"] = cleaned[:FULLTEXT_CHAR_CAP]
     return results
 
 

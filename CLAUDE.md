@@ -95,7 +95,7 @@ agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
 | `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
 | `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
 | `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
-| `podcast` | `agents/podcast_agent.py` | Podcast 研究；屬 `_MANUAL_ONLY_TYPES`，必須 `--type podcast`；router 傳 raw 原文，agent 內 `parse_instruction` node 用 Haiku 解析 topic/questions；全文抓取用 trafilatura（失敗 fallback 到 Tavily snippet） |
+| `podcast` | `agents/podcast_agent.py` | Podcast 研究；屬 `_MANUAL_ONLY_TYPES`，必須 `--type podcast`；router 傳 raw 原文，agent 內 `parse_instruction` node 用 Haiku 解析 topic/questions；全文抓取走三層 cascade：trafilatura → Tavily extract → Tavily snippet；搜尋用 `topic="news"` 並排除 PDF/Office 檔；extract 的 raw markdown 經 `_strip_extract_boilerplate` 去導航/廣告後才翻譯 |
 | `speech_ppt` | `agents/speech_ppt_agent.py` | 演講 PPT；輸入 CY 口述 transcript；結構化頁自動生成（DALL-E），非結構化頁 echo notes；需 OPENAI_API_KEY |
 
 ### Agent 內部結構

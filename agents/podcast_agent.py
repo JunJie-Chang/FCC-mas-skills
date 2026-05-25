@@ -38,12 +38,13 @@ import config
 from formatters.word_formatter import WordBuilder
 from utils.file_naming import general
 from utils.logger import AgentLogger
-from utils.search import search
+from utils.search import fetch_full_content, search, strip_extract_boilerplate
 
 load_dotenv(override=True)
 
 _RESULTS_PER_QUESTION = 3    # final articles per question
-_SEARCH_FETCH_EXTRA   = 4    # extra results to fetch to survive filter + dedup
+_SEARCH_FETCH_EXTRA   = 6    # extra results to fetch to survive filter + dedup
+                              # (blocked / pdf-doc / short / dup all eat into this)
 _MIN_ARTICLE_CHARS    = 50   # cleaned body must have at least this many chars
                               # (drops only obvious snippet stubs; trust whitelist)
 
@@ -136,6 +137,17 @@ def _is_blocked(url: str) -> bool:
     return any(domain == b or domain.endswith("." + b) for b in _BLOCKED_DOMAINS)
 
 
+_DOC_EXTENSIONS = (".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx")
+
+
+def _is_document_url(url: str) -> bool:
+    """
+    True if the URL points to a document file (PDF / Office) rather than a
+    news page. Podcast wants news articles, not research reports / filings.
+    """
+    return urlparse(url).path.lower().endswith(_DOC_EXTENSIONS)
+
+
 def _scrape(url: str) -> dict:
     """
     Scrape full text + metadata via trafilatura.
@@ -194,38 +206,83 @@ def _is_traditional_chinese(text: str) -> bool:
     return True
 
 
-def _translate_to_traditional(title: str, body: str) -> tuple[str, str]:
+_TRANSLATE_CHUNK_CHARS = 2500   # body split into ~this-size chunks for translation
+
+
+def _split_for_translation(body: str, limit: int = _TRANSLATE_CHUNK_CHARS) -> list[str]:
     """
-    Use LLM_FAST to translate title + body to Traditional Chinese.
-    Returns (translated_title, translated_body).
+    Split body into chunks of <= `limit` chars on paragraph (newline)
+    boundaries, so each chunk translates within a single LLM call. A single
+    paragraph longer than the limit is hard-split.
     """
+    chunks: list[str] = []
+    buf = ""
+    for para in body.split("\n"):
+        if len(para) > limit:
+            if buf:
+                chunks.append(buf)
+                buf = ""
+            for i in range(0, len(para), limit):
+                chunks.append(para[i:i + limit])
+            continue
+        if buf and len(buf) + len(para) + 1 > limit:
+            chunks.append(buf)
+            buf = para
+        else:
+            buf = f"{buf}\n{para}" if buf else para
+    if buf:
+        chunks.append(buf)
+    return chunks
+
+
+def _translate_chunk(text: str) -> str:
+    """Translate one chunk of text to Traditional Chinese (plain text in/out)."""
     client = _get_client()
-    prompt = f"""將以下文章標題和內文翻譯成繁體中文。
-若已是繁體中文，原文回傳即可。
+    prompt = f"""將以下內容翻譯成繁體中文。
+若已是繁體中文，原樣回傳。
 保留英文專有名詞（公司名、人名、產品名）。
-回傳純 JSON，不要 markdown：
+保留原有的段落換行。
+只輸出譯文本身，不要加任何說明、前言或標記。
 
-{{"title": "翻譯後標題", "body": "翻譯後內文（保留段落換行）"}}
-
-原標題：{title}
-
-原內文：
-{body[:6000]}
+{text}
 """
     msg = client.messages.create(
         model=config.LLM_FAST,
-        max_tokens=4096,
+        max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
     )
     from utils.cost_tracker import tracker
     tracker.record_claude(config.LLM_FAST, msg.usage.input_tokens, msg.usage.output_tokens)
+    return next((b.text for b in msg.content if hasattr(b, "text")), "").strip()
 
-    raw = next((b.text for b in msg.content if hasattr(b, "text")), "")
+
+def _translate_to_traditional(title: str, body: str) -> tuple[str, str]:
+    """
+    Translate title + body to Traditional Chinese with LLM_FAST.
+
+    The body is split into paragraph-aligned chunks so full-length articles
+    translate end to end — no input truncation, no output-token clipping.
+    A chunk that fails to translate degrades to its original text rather
+    than dropping content. Returns (translated_title, translated_body).
+    """
     try:
-        parsed = _parse_json(raw)
-        return parsed.get("title", title), parsed.get("body", body)
-    except Exception:
-        return title, body
+        trans_title = _translate_chunk(title) if title.strip() else title
+    except Exception as exc:
+        print(f"    [translate] ⚠ 標題翻譯失敗，保留原文：{exc}")
+        trans_title = title
+
+    trans_parts: list[str] = []
+    for chunk in _split_for_translation(body):
+        if not chunk.strip():
+            continue
+        try:
+            trans_parts.append(_translate_chunk(chunk))
+        except Exception as exc:
+            print(f"    [translate] ⚠ 段落翻譯失敗，保留原文：{exc}")
+            trans_parts.append(chunk)
+
+    trans_body = "\n".join(p for p in trans_parts if p)
+    return (trans_title or title), (trans_body or body)
 
 
 def _format_source_label(meta: dict, fallback_url: str) -> str:
@@ -423,7 +480,11 @@ def search_and_fetch(state: PodcastState) -> dict:
         query    = entry["query"]
 
         print(f"  搜尋：{query}")
-        results = search(query, max_results=_RESULTS_PER_QUESTION + _SEARCH_FETCH_EXTRA)
+        results = search(
+            query,
+            max_results=_RESULTS_PER_QUESTION + _SEARCH_FETCH_EXTRA,
+            topic="news",
+        )
         from utils.cost_tracker import tracker
         tracker.record_tavily(1)
 
@@ -439,25 +500,46 @@ def search_and_fetch(state: PodcastState) -> dict:
                 print(f"    [skip blocked] {url}")
                 continue
 
+            # Skip PDF / Office documents — podcast wants news, not reports
+            if _is_document_url(url):
+                print(f"    [skip pdf/doc] {url}")
+                continue
+
             # Skip duplicates
             if url in seen_urls:
                 print(f"    [skip dup] {url}")
                 continue
             seen_urls.add(url)
 
-            # Scrape full text + metadata
+            # Full-text cascade:
+            #   1. trafilatura — free, carries metadata (date/author/sitename)
+            #   2. Tavily extract — paid, but bot-blocking handled server-side
+            #      (trafilatura's default UA gets blocked by many news sites)
+            #   3. Tavily snippet — last resort, only 1-2 sentences
             meta = _scrape(url)
             if meta and meta.get("text"):
                 body  = meta["text"]
                 title = meta.get("title") or r["title"]
                 scrape_src = "scraped"
             else:
-                body  = r["content"]   # Tavily snippet fallback
+                snippet   = r.get("content", "")
+                extracted = fetch_full_content(url)
+                tracker.record_tavily(1)
+                if extracted and len(extracted) > len(snippet):
+                    body  = extracted
+                    scrape_src = "extract"
+                else:
+                    body  = snippet
+                    scrape_src = "snippet"
                 title = r["title"]
                 meta  = {}
-                scrape_src = "snippet"
 
-            # Remove web UI artifacts
+            # Strip nav menus / link lists / boilerplate (Tavily extract
+            # returns raw page markdown), then remove web UI artifacts.
+            # Done before translation so junk isn't translated or pasted.
+            body, n_dropped = strip_extract_boilerplate(body)
+            if n_dropped:
+                print(f"    [clean] dropped {n_dropped} boilerplate line(s)")
             body = _clean_body(body)
 
             # Reject articles that are too short to be substantive
