@@ -19,6 +19,7 @@ import {
 import { Shell } from "@/components/layout/Shell"
 import { NewJobPage } from "@/routes/NewJob"
 import { NewAudioPage } from "@/routes/NewAudio"
+import { NewTranslationPage } from "@/routes/NewTranslation"
 import { JobDetailPage } from "@/routes/JobDetail"
 import { ComingSoonPage } from "@/routes/Comingsoon"
 
@@ -48,6 +49,12 @@ const newAudioRoute = createRoute({
   component: NewAudioPage,
 })
 
+const newTranslationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/new-translation",
+  component: NewTranslationPage,
+})
+
 const jobsIndexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs",
@@ -64,6 +71,7 @@ const routeTree = rootRoute.addChildren([
   indexRoute,
   newJobRoute,
   newAudioRoute,
+  newTranslationRoute,
   jobsIndexRoute,
   jobDetailRoute,
 ])

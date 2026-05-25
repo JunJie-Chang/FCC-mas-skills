@@ -65,22 +65,23 @@ def _dispatch_blocking(
     Run a single agent. Synchronous on purpose — called via
     asyncio.to_thread (or from the STT pipeline's own worker thread).
 
-    Currently enabled types:
-        company_info  (Phase 1)
-        speech_ppt    (Phase 4)
-    Others reach Phase 3 / 5.
-    """
-    if agent_type == "company_info":
-        from agents.company_info_agent import run as agent_run
-        return agent_run(
-            task_instruction=instruction,
-            intern_name=intern_name,
-            task_date=task_date,
-            subdir=subdir,
-            mode=mode,
-            progress_cb=progress_cb,
-        )
+    Delegates to `router.dispatch()` so all 7 agent types Just Work
+    (Phase 0 already threaded progress_cb through the router). The
+    router's special-casing handles translation's JSON-shaped
+    instruction and speech_ppt's separate signature.
 
+    extra.generate_images is honoured for speech_ppt via the router's
+    own kwargs handling.
+
+    Raises ValueError for unknown agent_type (surfaced as job=FAILED).
+    """
+    from router import dispatch as router_dispatch
+    from utils.planner import PlanTask
+
+    # router.dispatch's speech_ppt branch reads from task.instruction
+    # directly and doesn't take generate_images — for the web layer we
+    # want generate_images controllable from job extra. Special-case
+    # that one type here; everything else goes through the router.
     if agent_type == "speech_ppt":
         from agents.speech_ppt_agent import run as agent_run
         return agent_run(
@@ -93,8 +94,18 @@ def _dispatch_blocking(
             progress_cb=progress_cb,
         )
 
-    raise NotImplementedError(
-        f"agent_type {agent_type!r} not enabled yet"
+    plan_task = PlanTask(
+        agent_type  = agent_type,
+        label       = instruction[:40] or agent_type,
+        instruction = instruction,
+    )
+    return router_dispatch(
+        task        = plan_task,
+        intern_name = intern_name,
+        task_date   = task_date,
+        subdir      = subdir,
+        mode        = mode,
+        progress_cb = progress_cb,
     )
 
 

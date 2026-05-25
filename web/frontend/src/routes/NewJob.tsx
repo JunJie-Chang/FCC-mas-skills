@@ -26,17 +26,17 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>
 
-// Phase 1 enabled company_info; Phase 4 adds speech_ppt (exercises
-// the confirm_slides interactive checkpoint). Other types still surface
-// as 501 until Phase 3 / 5 enables them on the backend.
-const TYPES: { value: AgentType; label: string; description: string; enabled: boolean }[] = [
-  { value: "company_info",   label: "公司研究",   description: "業務 / 財務 / 競爭定位", enabled: true },
-  { value: "speech_ppt",     label: "演講 PPT",  description: "結構化頁 + DALL-E",   enabled: true },
-  { value: "person_info",    label: "人物背景",   description: "公司關係 / 履歷",     enabled: false },
-  { value: "podcast",        label: "Podcast",   description: "主題 + 多問題研究",   enabled: false },
-  { value: "translation",    label: "翻譯",       description: "外文文章中譯",         enabled: false },
-  { value: "meeting",        label: "會議紀錄",   description: "口述 / 錄音整理",     enabled: false },
-  { value: "verbal_cleanup", label: "口述清稿",   description: "去除廢話與開頭語",     enabled: false },
+// Phase 3 unlocks the remaining agent types. Translation stays disabled
+// here because it needs structured input (title / source / body_text) —
+// that flow lives on its own /new-translation page in the sidebar.
+const TYPES: { value: AgentType; label: string; description: string; enabled: boolean; note?: string }[] = [
+  { value: "company_info",   label: "公司研究",   description: "業務 / 財務 / 競爭定位",     enabled: true },
+  { value: "person_info",    label: "人物背景",   description: "公司關係 / 履歷 / 背景",     enabled: true },
+  { value: "podcast",        label: "Podcast",   description: "主題 + 多問題研究",         enabled: true },
+  { value: "meeting",        label: "會議紀錄",   description: "口述會議整理（letter 共用）", enabled: true },
+  { value: "verbal_cleanup", label: "口述清稿",   description: "去除廢話、整理書面稿",       enabled: true },
+  { value: "speech_ppt",     label: "演講 PPT",  description: "結構化頁 + DALL-E 圖片",    enabled: true },
+  { value: "translation",    label: "翻譯",       description: "外文文章中譯（含 title / 來源欄位）", enabled: false, note: "請走「翻譯任務」頁面" },
 ]
 
 export function NewJobPage() {
@@ -115,9 +115,11 @@ export function NewJobPage() {
                       (!t.enabled ? " opacity-50 cursor-not-allowed" : "")
                     }
                   >
-                    <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center justify-between gap-2 mb-1">
                       <span className="font-medium text-sm">{t.label}</span>
-                      {!t.enabled && <Badge variant="muted">後續開放</Badge>}
+                      {!t.enabled && (
+                        <Badge variant="muted" className="shrink-0">{t.note ?? "後續開放"}</Badge>
+                      )}
                     </div>
                     <p className="text-xs text-[var(--color-muted-fg)]">{t.description}</p>
                   </button>
