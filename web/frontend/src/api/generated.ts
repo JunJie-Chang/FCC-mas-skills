@@ -104,6 +104,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/{job_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Confirm
+         * @description Submit the user's decision for whichever checkpoint the job is
+         *     currently waiting on. Body shape depends on the checkpoint kind —
+         *     the strategy on the agent side interprets it. Examples:
+         *
+         *     needs_confirm (planner task list):
+         *         {"action": "confirm", "tasks": [{agent_type, label, instruction}, ...]}
+         *         {"action": "cancel"}
+         *
+         *     needs_subject_review:
+         *         {"transcript": "<corrected text>"}
+         *
+         *     needs_slide_confirm:
+         *         {"proceed": true | false}
+         *
+         *     Returns the updated Job row (status will have flipped back to
+         *     `running` by the time this returns, because the strategy emits its
+         *     `*_resolved` event before the route response).
+         */
+        post: operations["submit_confirm_jobs__job_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Job
+         * @description Force-cancel a running or awaiting job. Two paths:
+         *
+         *       - Job sitting at a `needs_*` checkpoint → resolve the bus future
+         *         with cancellation; strategy raises CheckpointCancelled which
+         *         each method handles in its own sensible way (planner.confirm
+         *         returns None → batch aborts; subject_review skips review;
+         *         slide_confirm returns False → speech_ppt aborts).
+         *       - Job RUNNING with no open checkpoint → currently a soft cancel:
+         *         we mark CANCELLED in DB, the worker thread finishes whatever
+         *         node it's in and the runner notices the status mismatch on
+         *         commit. True interrupt-mid-node is a Phase 7 thing
+         *         (it requires plumbing cancel tokens into every blocking
+         *         Anthropic / Tavily call).
+         */
+        post: operations["cancel_job_jobs__job_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -216,7 +284,7 @@ export interface components {
          * JobStatus
          * @enum {string}
          */
-        JobStatus: "queued" | "running" | "done" | "failed" | "cancelled";
+        JobStatus: "queued" | "running" | "needs_confirm" | "needs_subject_review" | "needs_slide_confirm" | "done" | "failed" | "cancelled";
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -383,6 +451,74 @@ export interface operations {
                 };
                 content: {
                     "text/plain": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_confirm_jobs__job_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_job_jobs__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobResponse"];
                 };
             };
             /** @description Validation Error */

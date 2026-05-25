@@ -67,4 +67,16 @@ export const api = {
     if (!res.ok) throw new Error(`log fetch failed: ${res.status}`)
     return res.text()
   },
+
+  /**
+   * Submit a user decision for whichever checkpoint the job is
+   * currently waiting on. Body shape depends on the checkpoint kind
+   * — see web/api/routes/jobs.py:submit_confirm for the contract.
+   */
+  submitConfirm: (jobId: string, body: Record<string, unknown>) =>
+    request<JobResponse>("POST", `/jobs/${jobId}/confirm`, body),
+
+  /** Cancel a running or awaiting job. */
+  cancelJob: (jobId: string) =>
+    request<JobResponse>("POST", `/jobs/${jobId}/cancel`),
 }

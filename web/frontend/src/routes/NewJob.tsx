@@ -26,17 +26,17 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>
 
-// Phase 1 enables company_info only — others surface as 501 from the
-// backend. Show them anyway so the future scope is visible; disable
-// the picker until Phase 3 lands.
+// Phase 1 enabled company_info; Phase 4 adds speech_ppt (exercises
+// the confirm_slides interactive checkpoint). Other types still surface
+// as 501 until Phase 3 / 5 enables them on the backend.
 const TYPES: { value: AgentType; label: string; description: string; enabled: boolean }[] = [
   { value: "company_info",   label: "公司研究",   description: "業務 / 財務 / 競爭定位", enabled: true },
+  { value: "speech_ppt",     label: "演講 PPT",  description: "結構化頁 + DALL-E",   enabled: true },
   { value: "person_info",    label: "人物背景",   description: "公司關係 / 履歷",     enabled: false },
   { value: "podcast",        label: "Podcast",   description: "主題 + 多問題研究",   enabled: false },
   { value: "translation",    label: "翻譯",       description: "外文文章中譯",         enabled: false },
   { value: "meeting",        label: "會議紀錄",   description: "口述 / 錄音整理",     enabled: false },
   { value: "verbal_cleanup", label: "口述清稿",   description: "去除廢話與開頭語",     enabled: false },
-  { value: "speech_ppt",     label: "演講 PPT",  description: "結構化頁自動生成",     enabled: false },
 ]
 
 export function NewJobPage() {

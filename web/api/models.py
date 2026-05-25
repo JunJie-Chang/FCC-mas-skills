@@ -32,11 +32,17 @@ from web.api.db import Base
 # Phase 4 when the corresponding UI surfaces exist.
 
 class JobStatus(str, enum.Enum):
-    QUEUED    = "queued"
-    RUNNING   = "running"
-    DONE      = "done"
-    FAILED    = "failed"
-    CANCELLED = "cancelled"
+    QUEUED                = "queued"
+    RUNNING               = "running"
+    # Interactive checkpoint states (Phase 4). The agent has paused
+    # mid-run and is waiting for the user to submit a decision via
+    # POST /jobs/{id}/confirm. Status returns to RUNNING once resolved.
+    NEEDS_CONFIRM         = "needs_confirm"           # planner.confirm
+    NEEDS_SUBJECT_REVIEW  = "needs_subject_review"    # subject_review
+    NEEDS_SLIDE_CONFIRM   = "needs_slide_confirm"     # speech_ppt.confirm_slides
+    DONE                  = "done"
+    FAILED                = "failed"
+    CANCELLED             = "cancelled"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────

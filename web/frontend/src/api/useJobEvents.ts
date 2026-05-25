@@ -64,7 +64,11 @@ export function useJobEvents(jobId: string | undefined) {
         payload: parsed,
       }
       setEvents((prev) => [...prev, ev])
-      if (kind === "job_completed" || kind === "job_failed") {
+      if (
+        kind === "job_completed" ||
+        kind === "job_failed" ||
+        kind === "job_cancelled"
+      ) {
         setTerminal(true)
         es.close()
       }
@@ -74,9 +78,12 @@ export function useJobEvents(jobId: string | undefined) {
     // Listening on "message" alone misses named events.
     const names = [
       "message",
-      "job_started", "job_completed", "job_failed",
+      "job_started", "job_completed", "job_failed", "job_cancelled",
       "node_start", "node_end",
       "search_batch", "search_query", "evaluate",
+      "confirm_tasks_request", "confirm_tasks_resolved",
+      "subject_review_request", "subject_review_resolved",
+      "slide_confirm_request", "slide_confirm_resolved",
       "info", "warning", "error",
     ]
     names.forEach((n) => es.addEventListener(n, handle as EventListener))

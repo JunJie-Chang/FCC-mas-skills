@@ -8,18 +8,22 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { CheckpointGate } from "@/components/checkpoints/CheckpointGate"
 import {
   AlertCircle, CheckCircle2, Clock, Download, FileText, Loader2,
-  XCircle, Radio,
+  XCircle, Radio, PauseCircle,
 } from "lucide-react"
 
 /** Map status → Badge variant + icon + label. */
 const STATUS_META: Record<JobStatus, { label: string; variant: "muted" | "success" | "destructive" | "warning"; icon: React.ComponentType<{ className?: string }> }> = {
-  queued:    { label: "排隊中",   variant: "muted",       icon: Clock },
-  running:   { label: "執行中",   variant: "warning",     icon: Loader2 },
-  done:      { label: "完成",     variant: "success",     icon: CheckCircle2 },
-  failed:    { label: "失敗",     variant: "destructive", icon: XCircle },
-  cancelled: { label: "已取消",   variant: "muted",       icon: XCircle },
+  queued:               { label: "排隊中",    variant: "muted",       icon: Clock },
+  running:              { label: "執行中",    variant: "warning",     icon: Loader2 },
+  needs_confirm:        { label: "等待確認",  variant: "warning",     icon: PauseCircle },
+  needs_subject_review: { label: "校稿中",    variant: "warning",     icon: PauseCircle },
+  needs_slide_confirm:  { label: "確認投影片", variant: "warning",     icon: PauseCircle },
+  done:                 { label: "完成",      variant: "success",     icon: CheckCircle2 },
+  failed:               { label: "失敗",      variant: "destructive", icon: XCircle },
+  cancelled:            { label: "已取消",    variant: "muted",       icon: XCircle },
 }
 
 export function JobDetailPage() {
@@ -60,13 +64,15 @@ export function JobDetailPage() {
 
   const meta = STATUS_META[job.status]
   const StatusIcon = meta.icon
-  const isRunning = job.status === "running" || job.status === "queued"
+  const TERMINAL: JobStatus[] = ["done", "failed", "cancelled"]
+  const isRunning = !TERMINAL.includes(job.status)
   const elapsedSec = job.started_at && job.completed_at
     ? (new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()) / 1000
     : null
 
   return (
     <div className="space-y-6">
+      <CheckpointGate job={job} events={events} />
       {/* Header card */}
       <Card>
         <CardHeader>
@@ -231,9 +237,26 @@ function summarize(e: JobEvent): string {
     case "evaluate":
       return `評估：done=${p.done ?? 0} pending=${p.pending ?? 0} unresolved=${p.unresolved ?? 0}` +
              (p.round !== undefined ? ` (round=${String(p.round)})` : "")
-    default:
+    case "confirm_tasks_request":
+      return `等待任務確認（${(p.payload as { tasks?: unknown[] } | undefined)?.tasks?.length ?? 0} 條）`
+    case "subject_review_request": {
+      const n = (p.payload as { mentions?: unknown[] } | undefined)?.mentions?.length ?? 0
+      return `等待 STT 校稿（${n} 個主體）`
+    }
+    case "slide_confirm_request": {
+      const n = (p.payload as { slides_plan?: unknown[] } | undefined)?.slides_plan?.length ?? 0
+      return `等待投影片確認（${n} 張）`
+    }
+    case "confirm_tasks_resolved":
+    case "subject_review_resolved":
+    case "slide_confirm_resolved":
+      return `已${p.reason === "cancelled" ? "取消" : p.reason === "timeout" ? "逾時" : "確認"}（耗時 ${(p.elapsed as number | undefined)?.toFixed(1) ?? "?"}s）`
+    case "job_cancelled":
+      return "任務已取消"
+    default: {
       // Fallback: stringify whatever's there minus the noisy fields.
-      const { kind, ts, _event_id, ...rest } = p
+      const { kind: _k, ts: _t, _event_id: _i, ...rest } = p
       return Object.keys(rest).length === 0 ? "" : JSON.stringify(rest)
+    }
   }
 }

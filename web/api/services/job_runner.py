@@ -24,9 +24,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from utils.confirm import use_strategy
 from utils.cost_tracker import CostTracker, use_tracker
 from web.api.db import SessionLocal
 from web.api.models import Job, JobStatus
+from web.api.services.confirm_strategy import WebConfirmStrategy
 from web.api.services.progress_bus import bus
 
 log = logging.getLogger("job_runner")
@@ -45,6 +47,7 @@ def _dispatch_blocking(
     task_date: str,
     subdir: str,
     mode: str,
+    extra: dict[str, Any],
     progress_cb,
 ) -> dict[str, Any]:
     """
@@ -54,7 +57,10 @@ def _dispatch_blocking(
     bound for the duration of this call via contextvars / threading.local
     set up by the caller.
 
-    Phase 1: company_info only. Other types Phase 3 / 5.
+    Currently enabled types:
+        company_info  (Phase 1)
+        speech_ppt    (Phase 4 — exercises the confirm_slides checkpoint)
+    Other types reach Phase 3 / 5.
     """
     if agent_type == "company_info":
         from agents.company_info_agent import run as agent_run
@@ -67,10 +73,22 @@ def _dispatch_blocking(
             progress_cb=progress_cb,
         )
 
+    if agent_type == "speech_ppt":
+        from agents.speech_ppt_agent import run as agent_run
+        return agent_run(
+            task_instruction=instruction,
+            intern_name=intern_name,
+            task_date=task_date,
+            subdir=subdir,
+            generate_images=bool(extra.get("generate_images", True)),
+            mode=mode,
+            progress_cb=progress_cb,
+        )
+
     # Other types reach Phase 3 / 5. Raising lets the runner surface a
     # clean error status to the user instead of silently hanging.
     raise NotImplementedError(
-        f"agent_type {agent_type!r} not enabled in Phase 1 yet"
+        f"agent_type {agent_type!r} not enabled yet"
     )
 
 
@@ -119,12 +137,17 @@ async def execute_job(job_id: str) -> None:
             task_date=job.created_at.strftime("%Y-%m-%d"),
             subdir=job.subdir or "adhoc",
             mode=job.mode,
+            extra=dict(job.extra or {}),
         )
 
+    confirm_strategy = WebConfirmStrategy(job_id=job_id)
+
     def _run_with_tracker() -> dict[str, Any]:
-        # Thread-local bind for cost_tracker survives within this
-        # thread for the lifetime of the with-block.
-        with use_tracker(tracker):
+        # Thread-local bind for cost_tracker AND confirm strategy survive
+        # within this thread for the lifetime of the with-block, so
+        # agent code's tracker.record_* + planner.confirm() / etc. go
+        # to the per-job instances.
+        with use_tracker(tracker), use_strategy(confirm_strategy):
             return _dispatch_blocking(progress_cb=progress_cb, **agent_kwargs)
 
     error_msg: str | None = None
@@ -138,13 +161,40 @@ async def execute_job(job_id: str) -> None:
         error_msg = f"{type(exc).__name__}: {exc}"
         log.exception("job %s failed", job_id)
 
-    # Step 3: persist final state.
+    # Step 3: persist final state. Three cases:
+    #   - error_msg set → FAILED
+    #   - no output_path → CANCELLED (agent returned cleanly without a
+    #     deliverable, which means it took the early-exit edge after a
+    #     user-cancelled checkpoint; e.g. speech_ppt confirm_slides=False)
+    #   - otherwise → DONE
+    # Respect a /cancel route's pre-set CANCELLED status either way.
     cost_usd = tracker.total_usd()
-    final_status = JobStatus.FAILED if error_msg else JobStatus.DONE
+    if error_msg:
+        final_status = JobStatus.FAILED
+    elif not result.get("output_path"):
+        final_status = JobStatus.CANCELLED
+    else:
+        final_status = JobStatus.DONE
 
     with SessionLocal() as db:
         job = db.get(Job, job_id)
         if job is None:
+            return
+        if job.status == JobStatus.CANCELLED:
+            # User cancelled — keep terminal state, just record cost
+            # and (if the agent did produce output before cancel) the
+            # paths. Don't overwrite the cancel.
+            job.cost_usd = cost_usd
+            if result.get("output_path"):
+                job.output_path = result["output_path"]
+                job.log_path = result.get("log_path")
+            job.completed_at = _utcnow()
+            db.commit()
+            bus.publish_from_thread(job_id, {
+                "kind": "job_cancelled",
+                "ts":   _utcnow().isoformat(),
+                "cost_usd": cost_usd,
+            })
             return
         job.status = final_status
         job.completed_at = _utcnow()
@@ -155,7 +205,11 @@ async def execute_job(job_id: str) -> None:
         db.commit()
 
     bus.publish_from_thread(job_id, {
-        "kind": "job_completed" if not error_msg else "job_failed",
+        "kind": (
+            "job_failed" if final_status == JobStatus.FAILED else
+            "job_cancelled" if final_status == JobStatus.CANCELLED else
+            "job_completed"
+        ),
         "ts":   _utcnow().isoformat(),
         "status": final_status.value,
         "cost_usd": cost_usd,

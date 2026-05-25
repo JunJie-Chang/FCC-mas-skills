@@ -17,9 +17,9 @@ import json
 import logging
 import mimetypes
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
@@ -27,6 +27,7 @@ from sse_starlette.sse import EventSourceResponse
 from web.api.db import get_session
 from web.api.models import Job, JobEvent, JobStatus
 from web.api.schemas import JobCreateRequest, JobResponse
+from web.api.services.confirm_bus import confirm_bus
 from web.api.services.job_runner import execute_job
 from web.api.services.progress_bus import bus
 
@@ -203,3 +204,95 @@ def get_log(job_id: str, db: Session = Depends(get_session)) -> str:
     if not path.exists():
         raise HTTPException(status_code=410, detail="log file no longer on disk")
     return path.read_text(encoding="utf-8")
+
+
+# ── Interactive checkpoint endpoints (Phase 4) ──────────────────────
+
+_NEEDS_STATUSES = {
+    JobStatus.NEEDS_CONFIRM,
+    JobStatus.NEEDS_SUBJECT_REVIEW,
+    JobStatus.NEEDS_SLIDE_CONFIRM,
+}
+
+
+@router.post("/{job_id}/confirm", response_model=JobResponse)
+def submit_confirm(
+    job_id: str,
+    body: dict[str, Any] = Body(...),
+    db: Session = Depends(get_session),
+) -> Job:
+    """
+    Submit the user's decision for whichever checkpoint the job is
+    currently waiting on. Body shape depends on the checkpoint kind —
+    the strategy on the agent side interprets it. Examples:
+
+    needs_confirm (planner task list):
+        {"action": "confirm", "tasks": [{agent_type, label, instruction}, ...]}
+        {"action": "cancel"}
+
+    needs_subject_review:
+        {"transcript": "<corrected text>"}
+
+    needs_slide_confirm:
+        {"proceed": true | false}
+
+    Returns the updated Job row (status will have flipped back to
+    `running` by the time this returns, because the strategy emits its
+    `*_resolved` event before the route response).
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status not in _NEEDS_STATUSES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"job is not awaiting confirmation (status={job.status.value})",
+        )
+
+    if not confirm_bus.resolve(job_id, body):
+        # No future to resolve — either the agent already moved on
+        # (race) or the strategy never registered. Either way the
+        # frontend should refresh.
+        raise HTTPException(
+            status_code=409,
+            detail="no pending checkpoint found for this job",
+        )
+
+    db.refresh(job)
+    return job
+
+
+@router.post("/{job_id}/cancel", response_model=JobResponse)
+def cancel_job(job_id: str, db: Session = Depends(get_session)) -> Job:
+    """
+    Force-cancel a running or awaiting job. Two paths:
+
+      - Job sitting at a `needs_*` checkpoint → resolve the bus future
+        with cancellation; strategy raises CheckpointCancelled which
+        each method handles in its own sensible way (planner.confirm
+        returns None → batch aborts; subject_review skips review;
+        slide_confirm returns False → speech_ppt aborts).
+      - Job RUNNING with no open checkpoint → currently a soft cancel:
+        we mark CANCELLED in DB, the worker thread finishes whatever
+        node it's in and the runner notices the status mismatch on
+        commit. True interrupt-mid-node is a Phase 7 thing
+        (it requires plumbing cancel tokens into every blocking
+        Anthropic / Tavily call).
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status in (JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED):
+        raise HTTPException(
+            status_code=409,
+            detail=f"job already terminal (status={job.status.value})",
+        )
+
+    job.status = JobStatus.CANCELLED
+    db.commit()
+
+    # Best-effort wake any pending checkpoint.
+    confirm_bus.cancel(job_id)
+
+    db.refresh(job)
+    return job
