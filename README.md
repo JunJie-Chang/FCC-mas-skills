@@ -9,7 +9,7 @@
 **Mac / Linux / WSL2**：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas-skills/main/install.sh | bash
 ```
 
 **Windows**：請先裝 [WSL2](https://learn.microsoft.com/zh-tw/windows/wsl/install)，在 WSL2 終端機中跑上面那行。
@@ -109,7 +109,7 @@ Claude: 開始拆解 todo：
 直接重跑 installer 就好：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas-skills/main/install.sh | bash
 ```
 
 會 `git pull` + 重新 `pip install`，不會覆寫你的 `.env`。
@@ -177,5 +177,5 @@ Claude 照 SKILL.md 步驟跑：
 
 ## 反饋與問題
 
-- 開 issue：https://github.com/JunJie-Chang/FCC-mas/issues
+- 開 issue：https://github.com/JunJie-Chang/FCC-mas-skills/issues
 - 或找 Justin
