@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>FCC-mas — Multi-Agent System</title>
+<style>
+  /* ── Reset & Base ── */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI','PingFang TC','Microsoft JhengHei',sans-serif;
+    background: #E8EAED;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px;
+    gap: 20px;
+  }
+
+  /* ── Poster shell ── */
+  .poster {
+    width: 1060px;
+    background: #fff;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 6px 40px rgba(0,0,0,0.13);
+  }
+
+  /* ── Shared Header ── */
+  .hdr {
+    background: linear-gradient(135deg, #001F5B 0%, #003087 65%, #004AAD 100%);
+    color: white;
+    padding: 28px 40px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+  }
+  .hdr h1 { font-size: 28px; font-weight: 800; letter-spacing: 0.3px; margin-bottom: 5px; }
+  .hdr h1 em { font-style: normal; color: #F47920; }
+  .hdr .sub { font-size: 12.5px; opacity: 0.8; }
+  .hdr .badge {
+    display: inline-block;
+    background: rgba(255,255,255,0.13);
+    border: 1px solid rgba(255,255,255,0.25);
+    border-radius: 20px;
+    padding: 2px 10px;
+    font-size: 10.5px;
+    margin: 2px 2px 0 0;
+  }
+  .hdr-right { text-align: right; font-size: 11.5px; opacity: 0.6; line-height: 1.9; }
+  .hdr-right strong { color: #F47920; opacity: 1; font-size: 13px; }
+
+  /* ── Shared Footer ── */
+  .ftr {
+    background: #001F5B;
+    color: rgba(255,255,255,0.4);
+    font-size: 11px;
+    padding: 10px 40px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .ftr .or { color: #F47920; font-weight: 600; opacity:1; }
+
+  /* ── Page separator ── */
+  .page-sep {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #6B7280;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    width: 1060px;
+  }
+  .page-sep::before, .page-sep::after {
+    content: ''; flex: 1; height: 1px; background: #D1D5DB;
+  }
+
+  @media print {
+    body { background: white; padding: 0; gap: 0; }
+    .poster { box-shadow: none; border-radius: 0; width: 100%; }
+    .page-sep { page-break-after: always; display: none; }
+    .poster:first-child { page-break-after: always; }
+  }
+
+  /* ════════════════════════════════════════
+     PAGE 1
+  ════════════════════════════════════════ */
+  .p1-body { display: grid; grid-template-columns: 325px 1fr; }
+
+  /* Left col */
+  .p1-left {
+    background: #F7F8FA;
+    border-right: 1px solid #E5E7EB;
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .card { background: white; border-radius: 10px; padding: 14px 16px; border: 1px solid #E5E7EB; }
+  .card-title {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #F47920; margin-bottom: 9px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .card-title::after { content:''; flex:1; height:1px; background:#FEE0C0; }
+
+  .pipe-flow { display:flex; flex-direction:column; gap:3px; margin-top:10px; }
+  .pipe-step { display:flex; align-items:center; gap:7px; font-size:11.5px; color:#374151; }
+  .pipe-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+
+  .agent-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .agent-item {
+    background: #FFF8F0; border:1px solid #FED7A0; border-radius:7px;
+    padding:7px 9px; font-size:10.5px;
+  }
+  .agent-item .aname { font-weight:800; color:#C05800; font-size:11px; }
+  .agent-item .adesc { color:#6B7280; margin-top:2px; line-height:1.4; }
+
+  .layer-list { display:flex; flex-direction:column; gap:8px; }
+  .layer-item { display:flex; align-items:flex-start; gap:8px; }
+  .layer-icon { width:24px; height:24px; border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:12px; flex-shrink:0; margin-top:1px; }
+  .lname { font-size:11.5px; font-weight:700; color:#111827; }
+  .ldesc { font-size:10.5px; color:#6B7280; line-height:1.4; margin-top:1px; }
+
+  .tech-tags { display:flex; flex-wrap:wrap; gap:5px; }
+  .tech-tag {
+    background:#EFF6FF; color:#003087; border:1px solid #BFDBFE;
+    border-radius:5px; padding:3px 8px; font-size:10px; font-weight:600;
+  }
+
+  /* Right col */
+  .p1-right { padding: 24px 26px 22px; }
+  .gsec-title {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #6B7280; margin-bottom: 12px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .gsec-badge {
+    background: #003087; color: white; border-radius:4px;
+    padding: 2px 8px; font-size:10px; letter-spacing:0.5px;
+  }
+  .gsec-badge.or { background: #F47920; }
+
+  .legend { display:flex; gap:13px; flex-wrap:wrap; margin-top:9px; }
+  .legend-item { display:flex; align-items:center; gap:5px; font-size:10px; color:#6B7280; }
+  .ldot { width:11px; height:11px; border-radius:3px; }
+
+  .graph-divider { border:none; border-top:1px dashed #E5E7EB; margin:14px 0 12px; }
+
+  svg text { font-family:'Segoe UI','PingFang TC','Microsoft JhengHei',sans-serif; }
+
+
+  /* ════════════════════════════════════════
+     PAGE 2
+  ════════════════════════════════════════ */
+  .p2-body { display: grid; grid-template-columns: 1fr 370px; }
+
+  /* Terminal panel */
+  .terminal-panel {
+    background: #0D1117;
+    padding: 22px 24px;
+    font-family: 'SF Mono','Fira Code','Consolas','Courier New',monospace;
+    font-size: 11.2px;
+    line-height: 1.65;
+    overflow: hidden;
+  }
+  .terminal-panel .t-title {
+    font-family: 'Segoe UI','PingFang TC','Microsoft JhengHei',sans-serif;
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #4B5563; margin-bottom: 14px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .terminal-panel .t-title::after { content:''; flex:1; height:1px; background:#1F2937; }
+
+  /* Log color classes */
+  .lhdr  { color:#F47920; font-weight:700; }
+  .ldiv  { color:#F59E0B; font-weight:600; }
+  .lkey  { color:#93C5FD; }
+  .lval  { color:#E2E8F0; }
+  .lurl  { color:#34D399; }
+  .lsc   { color:#FDE68A; }
+  .lraw  { color:#FCD34D; }
+  .lzh   { color:#A7F3D0; }
+  .lok   { color:#34D399; font-weight:700; }
+  .lpart { color:#FCD34D; font-weight:700; }
+  .lmiss { color:#F87171; font-weight:700; }
+  .lnote { color:#6B7280; font-style:italic; }
+  .lnum  { color:#374151; margin-right:10px; user-select:none; display:inline-block; width:18px; text-align:right; }
+
+  /* Highlighted sections */
+  .hl-section {
+    border-left: 3px solid transparent;
+    padding-left: 10px;
+    margin: 4px 0;
+    border-radius: 0 4px 4px 0;
+  }
+  .hl-1 { border-color: #3B82F6; background: rgba(59,130,246,0.07); }
+  .hl-2 { border-color: #D97706; background: rgba(217,119,6,0.07); }
+  .hl-3 { border-color: #EAB308; background: rgba(234,179,8,0.07); }
+  .hl-4 { border-color: #F47920; background: rgba(244,121,32,0.07); }
+
+  .anno-badge {
+    display: inline-block;
+    width: 17px; height: 17px; border-radius: 50%;
+    font-size: 10px; font-weight: 800;
+    line-height: 17px; text-align: center;
+    margin-right: 5px;
+    font-family: 'Segoe UI',sans-serif;
+  }
+  .ab-1 { background:#3B82F6; color:white; }
+  .ab-2 { background:#D97706; color:white; }
+  .ab-3 { background:#EAB308; color:white; }
+  .ab-4 { background:#F47920; color:white; }
+
+  /* Annotation panel */
+  .anno-panel {
+    background: #F7F8FA;
+    border-left: 1px solid #E5E7EB;
+    padding: 20px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .anno-panel .ap-title {
+    font-size: 10px; font-weight: 800; text-transform: uppercase;
+    letter-spacing: 1.2px; color: #6B7280; margin-bottom: 2px;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .anno-panel .ap-title::after { content:''; flex:1; height:1px; background:#E5E7EB; }
+
+  .anno-card {
+    background: white;
+    border-radius: 10px;
+    border: 1px solid #E5E7EB;
+    padding: 10px 13px;
+    border-left-width: 4px;
+  }
+  .anno-card.ac-1 { border-left-color: #3B82F6; }
+  .anno-card.ac-2 { border-left-color: #D97706; }
+  .anno-card.ac-3 { border-left-color: #EAB308; }
+  .anno-card.ac-4 { border-left-color: #F47920; }
+
+  .anno-card .ac-header {
+    display: flex; align-items: center; gap: 7px;
+    margin-bottom: 6px;
+  }
+  .anno-card .ac-title { font-size:12px; font-weight:800; color:#111827; }
+  .anno-card .ac-body { font-size:11px; color:#374151; line-height:1.6; }
+  .anno-card .ac-body strong { color:#003087; }
+  .anno-card .ac-tag {
+    display:inline-block; border-radius:4px; padding:1px 7px;
+    font-size:10px; font-weight:700; margin-top:6px;
+  }
+  .ac-tag.blue   { background:#EFF6FF; color:#1D4ED8; }
+  .ac-tag.amber  { background:#FFFBEB; color:#92400E; }
+  .ac-tag.yellow { background:#FEFCE8; color:#854D0E; }
+  .ac-tag.orange { background:#FFF7ED; color:#C2410C; }
+
+  .impact-box {
+    background: #003087;
+    border-radius: 10px;
+    padding: 13px 15px;
+    color: white;
+    margin-top: auto;
+  }
+  .impact-box .ib-title { font-size:11px; font-weight:800; color:#F47920; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px; }
+  .impact-box p { font-size:11px; line-height:1.6; opacity:0.9; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     PAGE 1 — Architecture
+════════════════════════════════════════════ -->
+<div class="poster">
+  <div class="hdr">
+    <div>
+      <h1>FCC-mas &nbsp;<em>·</em>&nbsp; Multi-Agent Research System</h1>
+      <div class="sub">老闆口述指令 → STT → AI Planner → Multi-Agent 研究 → Word 報告自動輸出</div>
+      <div style="margin-top:10px;">
+        <span class="badge">LangGraph</span>
+        <span class="badge">Claude API</span>
+        <span class="badge">ReAct Loop</span>
+        <span class="badge">yfinance</span>
+        <span class="badge">Tavily Search</span>
+        <span class="badge">gpt-4o-transcribe</span>
+      </div>
+    </div>
+    <div class="hdr-right">
+      FCC Partners 實習專案<br>
+      Python 3.13 &nbsp;·&nbsp; Anthropic SDK<br>
+      <strong>張鈞傑 Justin</strong>
+    </div>
+  </div>
+
+  <div class="p1-body">
+    <!-- Left -->
+    <div class="p1-left">
+
+      <div class="card">
+        <div class="card-title">專案概述</div>
+        <p style="font-size:12px;color:#374151;line-height:1.7;">將老闆口述的指令自動化成結構化報告：語音轉文字後，AI Planner 拆解任務並分派給 Research Agent，每個 Agent 透過 ReAct Loop 自主搜尋、驗證、合成報告。</p>
+        <div class="pipe-flow">
+          <div class="pipe-step"><div class="pipe-dot" style="background:#8B5CF6;"></div>口述音檔 / 文字輸入</div>
+          <div class="pipe-step" style="padding-left:13px;color:#9CA3AF;font-size:10px;">↓ gpt-4o-transcribe + 專有名詞修正</div>
+          <div class="pipe-step"><div class="pipe-dot" style="background:#F47920;"></div>Haiku Planner 拆解 + 任務分類</div>
+          <div class="pipe-step" style="padding-left:13px;color:#9CA3AF;font-size:10px;">↓ CLI 確認 / 修改 / 合併任務</div>
+          <div class="pipe-step"><div class="pipe-dot" style="background:#003087;"></div>Router → Agent → Word 輸出</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Agent 清單</div>
+        <div class="agent-grid">
+          <div class="agent-item"><div class="aname">company_info</div><div class="adesc">公司研究 + 財務資料層</div></div>
+          <div class="agent-item"><div class="aname">person_info</div><div class="adesc">人物背景 ReAct 研究</div></div>
+          <div class="agent-item"><div class="aname">translation</div><div class="adesc">翻譯 + OCR 圖片/PDF</div></div>
+          <div class="agent-item"><div class="aname">podcast</div><div class="adesc">Podcast 文章整理</div></div>
+          <div class="agent-item"><div class="aname">verbal_cleanup</div><div class="adesc">口述清稿去廢話</div></div>
+          <div class="agent-item"><div class="aname">speech_ppt</div><div class="adesc">演講 PPT 自動生成</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">三層品質保證</div>
+        <div class="layer-list">
+          <div class="layer-item">
+            <div class="layer-icon" style="background:#DBEAFE;">🔢</div>
+            <div>
+              <div class="lname">Numbers Layer</div>
+              <div class="ldesc">數字換算移出 LLM，Haiku verbatim echo → Python 確定性轉換，防 billion/億 差 10 倍</div>
+            </div>
+          </div>
+          <div class="layer-item">
+            <div class="layer-icon" style="background:#DCFCE7;">✅</div>
+            <div>
+              <div class="lname">Premise Validation</div>
+              <div class="ldesc">生成前驗證任務斷言有無 evidence，缺資料必須明寫，不准空洞詞彙帶過</div>
+            </div>
+          </div>
+          <div class="layer-item">
+            <div class="layer-icon" style="background:#FEF3C7;">🎙</div>
+            <div>
+              <div class="lname">Subject Review</div>
+              <div class="ldesc">STT 後讓使用者確認音近字，防「智伸科 → 資深客」下游累積誤判</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Tech Stack</div>
+        <div class="tech-tags">
+          <span class="tech-tag">LangGraph</span>
+          <span class="tech-tag">Claude Opus 4</span>
+          <span class="tech-tag">Claude Haiku</span>
+          <span class="tech-tag">Tavily Search</span>
+          <span class="tech-tag">yfinance</span>
+          <span class="tech-tag">FinanceDatabase</span>
+          <span class="tech-tag">gpt-4o-transcribe</span>
+          <span class="tech-tag">python-docx</span>
+          <span class="tech-tag">python-pptx</span>
+          <span class="tech-tag">DALL-E 3</span>
+          <span class="tech-tag">trafilatura</span>
+        </div>
+      </div>
+
+    </div><!-- /p1-left -->
+
+    <!-- Right -->
+    <div class="p1-right">
+
+      <!-- company_info -->
+      <div class="gsec-title"><span class="gsec-badge">company_info</span> Agent — LangGraph 架構（含財務資料層）</div>
+
+      <svg width="662" height="498" viewBox="0 0 640 530" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="a"   markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#94a3b8"/></marker>
+          <marker id="a-b" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#003087"/></marker>
+          <marker id="a-o" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#B45309"/></marker>
+          <marker id="a-r" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#F47920"/></marker>
+          <marker id="a-g" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L0,6 L8,3 z" fill="#065F46"/></marker>
+        </defs>
+
+        <!-- parse_task -->
+        <rect x="195" y="20" width="160" height="38" rx="8" fill="#003087"/>
+        <text x="275" y="34" text-anchor="middle" fill="white" font-size="12" font-weight="700">parse_task</text>
+        <text x="275" y="49" text-anchor="middle" fill="#93C5FD" font-size="10">Haiku：研究計劃 + 初始 queries</text>
+        <line x1="275" y1="58" x2="275" y2="76" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+        <!-- check_financial_need -->
+        <rect x="155" y="80" width="240" height="38" rx="8" fill="#92400E"/>
+        <text x="275" y="94" text-anchor="middle" fill="white" font-size="12" font-weight="700">check_financial_need</text>
+        <text x="275" y="109" text-anchor="middle" fill="#FDE68A" font-size="10">Haiku：Q1/Q2/Q3 分類；ticker 解析</text>
+
+        <line x1="200" y1="118" x2="100" y2="136" stroke="#B45309" stroke-width="1.5" marker-end="url(#a-o)"/>
+        <text x="132" y="128" text-anchor="middle" fill="#B45309" font-size="10" font-style="italic">Q2 非空</text>
+        <line x1="350" y1="118" x2="450" y2="136" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#a)"/>
+        <text x="418" y="128" text-anchor="middle" fill="#94a3b8" font-size="10" font-style="italic">Q2=[]</text>
+
+        <!-- fetch_financial_data -->
+        <rect x="20" y="140" width="160" height="38" rx="8" fill="#92400E"/>
+        <text x="100" y="154" text-anchor="middle" fill="white" font-size="12" font-weight="700">fetch_financial_data</text>
+        <text x="100" y="169" text-anchor="middle" fill="#FDE68A" font-size="10">yfinance：股價 / 財報 / 指標</text>
+
+        <!-- fetch_sector_data -->
+        <rect x="370" y="140" width="160" height="38" rx="8" fill="#78350F"/>
+        <text x="450" y="154" text-anchor="middle" fill="white" font-size="12" font-weight="700">fetch_sector_data</text>
+        <text x="450" y="169" text-anchor="middle" fill="#FDE68A" font-size="10">FinanceDatabase：產業掃描</text>
+
+        <line x1="180" y1="159" x2="368" y2="159" stroke="#B45309" stroke-width="1.5" marker-end="url(#a-o)"/>
+        <line x1="450" y1="178" x2="450" y2="210" stroke="#94a3b8" stroke-width="1.5"/>
+        <line x1="450" y1="210" x2="356" y2="210" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+        <!-- run_search -->
+        <rect x="155" y="196" width="200" height="38" rx="8" fill="#003087"/>
+        <text x="255" y="210" text-anchor="middle" fill="white" font-size="12" font-weight="700">run_search</text>
+        <text x="255" y="225" text-anchor="middle" fill="#93C5FD" font-size="10">初始 batch queries → evidence</text>
+        <line x1="255" y1="234" x2="255" y2="252" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+        <!-- evaluate -->
+        <rect x="155" y="256" width="200" height="38" rx="8" fill="#C05800"/>
+        <text x="255" y="270" text-anchor="middle" fill="white" font-size="12" font-weight="700">evaluate</text>
+        <text x="255" y="285" text-anchor="middle" fill="#FED7A0" font-size="10">Haiku：todo → done/pending/unresolved</text>
+
+        <line x1="355" y1="275" x2="415" y2="275" stroke="#F47920" stroke-width="1.5" marker-end="url(#a-r)"/>
+        <text x="384" y="268" text-anchor="middle" fill="#F47920" font-size="10" font-style="italic">loop</text>
+        <line x1="255" y1="294" x2="255" y2="378" stroke="#065F46" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#a-g)"/>
+        <text x="237" y="338" text-anchor="end" fill="#065F46" font-size="10" font-style="italic">done</text>
+
+        <!-- next_action -->
+        <rect x="415" y="256" width="185" height="38" rx="8" fill="#D97706"/>
+        <text x="507" y="270" text-anchor="middle" fill="white" font-size="12" font-weight="700">next_action</text>
+        <text x="507" y="285" text-anchor="middle" fill="#FEF3C7" font-size="10">Haiku：下一條搜尋 query</text>
+        <line x1="507" y1="294" x2="507" y2="312" stroke="#F47920" stroke-width="1.5" marker-end="url(#a-r)"/>
+
+        <!-- execute_search -->
+        <rect x="415" y="316" width="185" height="38" rx="8" fill="#B45309"/>
+        <text x="507" y="330" text-anchor="middle" fill="white" font-size="12" font-weight="700">execute_search</text>
+        <text x="507" y="345" text-anchor="middle" fill="#FEF3C7" font-size="10">Tavily → append evidence；round+1</text>
+
+        <line x1="415" y1="335" x2="390" y2="335" stroke="#F47920" stroke-width="1.5"/>
+        <line x1="390" y1="335" x2="390" y2="275" stroke="#F47920" stroke-width="1.5"/>
+        <line x1="390" y1="275" x2="357" y2="275" stroke="#F47920" stroke-width="1.5" marker-end="url(#a-r)"/>
+        <text x="408" y="302" text-anchor="middle" fill="#F47920" font-size="10" font-weight="700">ReAct Loop</text>
+        <text x="408" y="313" text-anchor="middle" fill="#F47920" font-size="10">max 6 輪</text>
+
+        <rect x="418" y="358" width="175" height="20" rx="4" fill="#FFFBEB" stroke="#FDE68A" stroke-width="1"/>
+        <text x="505" y="372" text-anchor="middle" fill="#92400E" font-size="10">stall / 輪數超限 → 強制結束</text>
+
+        <!-- extract_numbers -->
+        <rect x="155" y="382" width="200" height="36" rx="8" fill="#065F46"/>
+        <text x="255" y="396" text-anchor="middle" fill="white" font-size="12" font-weight="700">extract_numbers</text>
+        <text x="255" y="410" text-anchor="middle" fill="#A7F3D0" font-size="10">Haiku echo → Python 確定性換算</text>
+        <line x1="255" y1="418" x2="255" y2="436" stroke="#065F46" stroke-width="1.5" marker-end="url(#a-g)"/>
+
+        <!-- verify -->
+        <rect x="155" y="440" width="200" height="36" rx="8" fill="#047857"/>
+        <text x="255" y="454" text-anchor="middle" fill="white" font-size="12" font-weight="700">verify</text>
+        <text x="255" y="468" text-anchor="middle" fill="#A7F3D0" font-size="10">Haiku：前提驗證 / 覆蓋度檢查</text>
+        <line x1="255" y1="476" x2="255" y2="491" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+        <!-- generate_report -->
+        <rect x="70" y="493" width="175" height="32" rx="7" fill="#003087"/>
+        <text x="157" y="506" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">generate_report</text>
+        <text x="157" y="518" text-anchor="middle" fill="#93C5FD" font-size="9.5">Opus/Sonnet：JSON 報告合成</text>
+        <line x1="222" y1="475" x2="178" y2="491" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+        <!-- format_output -->
+        <rect x="260" y="493" width="175" height="32" rx="7" fill="#001F5B"/>
+        <text x="347" y="506" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">format_output</text>
+        <text x="347" y="518" text-anchor="middle" fill="#93C5FD" font-size="9.5">Word docx + .log sidecar</text>
+        <line x1="245" y1="509" x2="258" y2="509" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#a)"/>
+
+        <!-- END -->
+        <rect x="454" y="499" width="40" height="20" rx="10" fill="#F47920"/>
+        <text x="474" y="513" text-anchor="middle" fill="white" font-size="11" font-weight="700">END</text>
+        <line x1="435" y1="509" x2="452" y2="509" stroke="#F47920" stroke-width="1.5" marker-end="url(#a-r)"/>
+      </svg>
+
+      <!-- Legend -->
+      <div class="legend">
+        <div class="legend-item"><div class="ldot" style="background:#003087;"></div>主流程節點</div>
+        <div class="legend-item"><div class="ldot" style="background:#92400E;"></div>財務資料層</div>
+        <div class="legend-item"><div class="ldot" style="background:#C05800;"></div>ReAct Loop（max 6 輪）</div>
+        <div class="legend-item"><div class="ldot" style="background:#065F46;"></div>品質保證層</div>
+        <div class="legend-item">
+          <svg width="26" height="12"><line x1="0" y1="6" x2="18" y2="6" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="4,2"/><polygon points="18,3 26,6 18,9" fill="#94a3b8"/></svg>
+          Conditional Edge
+        </div>
+      </div>
+
+      <hr class="graph-divider"/>
+
+      <!-- person_info -->
+      <div class="gsec-title"><span class="gsec-badge or">person_info</span> Agent — 同架構，無財務資料層（max 5 輪）</div>
+
+      <svg width="662" height="184" viewBox="0 0 664 186" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="pa"   markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#94a3b8"/></marker>
+          <marker id="pa-o" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#F47920"/></marker>
+          <marker id="pa-g" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#065F46"/></marker>
+          <marker id="pa-b" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto"><path d="M0,0 L0,6 L7,3 z" fill="#003087"/></marker>
+        </defs>
+
+        <!-- Row 1 -->
+        <rect x="4" y="20" width="118" height="34" rx="7" fill="#003087"/>
+        <text x="63" y="33" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">parse_task</text>
+        <text x="63" y="46" text-anchor="middle" fill="#93C5FD" font-size="9.5">Haiku：研究計劃</text>
+        <line x1="122" y1="37" x2="136" y2="37" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#pa)"/>
+
+        <rect x="136" y="20" width="115" height="34" rx="7" fill="#003087"/>
+        <text x="193" y="33" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">run_search</text>
+        <text x="193" y="46" text-anchor="middle" fill="#93C5FD" font-size="9.5">初始搜尋批次</text>
+        <line x1="251" y1="37" x2="265" y2="37" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#pa)"/>
+
+        <rect x="265" y="20" width="115" height="34" rx="7" fill="#C05800"/>
+        <text x="322" y="33" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">evaluate</text>
+        <text x="322" y="46" text-anchor="middle" fill="#FED7A0" font-size="9.5">Haiku：todo 評估</text>
+
+        <line x1="380" y1="37" x2="394" y2="37" stroke="#F47920" stroke-width="1.5" marker-end="url(#pa-o)"/>
+        <text x="387" y="30" text-anchor="middle" fill="#F47920" font-size="9" font-style="italic">loop</text>
+
+        <rect x="394" y="20" width="120" height="34" rx="7" fill="#D97706"/>
+        <text x="454" y="33" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">next_action</text>
+        <text x="454" y="46" text-anchor="middle" fill="#FEF3C7" font-size="9.5">Haiku：下一 query</text>
+        <line x1="514" y1="37" x2="528" y2="37" stroke="#F47920" stroke-width="1.5" marker-end="url(#pa-o)"/>
+
+        <rect x="528" y="20" width="130" height="34" rx="7" fill="#B45309"/>
+        <text x="593" y="33" text-anchor="middle" fill="white" font-size="11.5" font-weight="700">execute_search</text>
+        <text x="593" y="46" text-anchor="middle" fill="#FEF3C7" font-size="9.5">Tavily；round+1</text>
+
+        <!-- Loop back above -->
+        <line x1="593" y1="20" x2="593" y2="8" stroke="#F47920" stroke-width="1.5"/>
+        <line x1="593" y1="8" x2="322" y2="8" stroke="#F47920" stroke-width="1.5"/>
+        <line x1="322" y1="8" x2="322" y2="20" stroke="#F47920" stroke-width="1.5" marker-end="url(#pa-o)"/>
+        <text x="458" y="6" text-anchor="middle" fill="#F47920" font-size="9" font-weight="700">max 5 輪</text>
+
+        <!-- done arrow -->
+        <line x1="322" y1="54" x2="322" y2="80" stroke="#065F46" stroke-width="1.5" stroke-dasharray="4,3"/>
+        <line x1="322" y1="80" x2="72" y2="80" stroke="#065F46" stroke-width="1.5"/>
+        <line x1="72" y1="80" x2="72" y2="108" stroke="#065F46" stroke-width="1.5" marker-end="url(#pa-g)"/>
+        <text x="200" y="76" text-anchor="middle" fill="#065F46" font-size="9" font-style="italic">done</text>
+
+        <!-- Row 2 -->
+        <rect x="4" y="110" width="135" height="32" rx="7" fill="#065F46"/>
+        <text x="71" y="123" text-anchor="middle" fill="white" font-size="11" font-weight="700">extract_numbers</text>
+        <text x="71" y="134" text-anchor="middle" fill="#A7F3D0" font-size="9">Haiku echo → Python</text>
+        <line x1="139" y1="126" x2="152" y2="126" stroke="#065F46" stroke-width="1.5" marker-end="url(#pa-g)"/>
+
+        <rect x="152" y="110" width="90" height="32" rx="7" fill="#047857"/>
+        <text x="197" y="123" text-anchor="middle" fill="white" font-size="11" font-weight="700">verify</text>
+        <text x="197" y="134" text-anchor="middle" fill="#A7F3D0" font-size="9">前提驗證</text>
+        <line x1="242" y1="126" x2="255" y2="126" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#pa)"/>
+
+        <rect x="255" y="110" width="140" height="32" rx="7" fill="#003087"/>
+        <text x="325" y="123" text-anchor="middle" fill="white" font-size="11" font-weight="700">generate_report</text>
+        <text x="325" y="134" text-anchor="middle" fill="#93C5FD" font-size="9">Opus/Sonnet 合成</text>
+        <line x1="395" y1="126" x2="408" y2="126" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#pa)"/>
+
+        <rect x="408" y="110" width="130" height="32" rx="7" fill="#001F5B"/>
+        <text x="473" y="123" text-anchor="middle" fill="white" font-size="11" font-weight="700">format_output</text>
+        <text x="473" y="134" text-anchor="middle" fill="#93C5FD" font-size="9">Word docx + .log</text>
+        <line x1="538" y1="126" x2="550" y2="126" stroke="#F47920" stroke-width="1.5" marker-end="url(#pa-o)"/>
+
+        <rect x="550" y="116" width="40" height="20" rx="10" fill="#F47920"/>
+        <text x="570" y="130" text-anchor="middle" fill="white" font-size="11" font-weight="700">END</text>
+
+        <!-- diff note -->
+        <rect x="4" y="155" width="656" height="20" rx="5" fill="#FFF7ED" stroke="#FED7A0" stroke-width="1"/>
+        <text x="330" y="169" text-anchor="middle" fill="#92400E" font-size="10">與 company_info 的差異：無 check_financial_need / fetch_financial_data / fetch_sector_data 三個財務節點</text>
+      </svg>
+
+    </div><!-- /p1-right -->
+  </div><!-- /p1-body -->
+
+  <div class="ftr">
+    <span>FCC Partners Multi-Agent System &nbsp;·&nbsp; <span class="or">張鈞傑 Justin</span> &nbsp;·&nbsp; 2026</span>
+    <span>Python 3.13 &nbsp;·&nbsp; LangGraph &nbsp;·&nbsp; Anthropic Claude API</span>
+  </div>
+</div><!-- /page 1 -->
+
+
+<!-- ══ Page separator ══ -->
+<div class="page-sep">Page 2 &nbsp;—&nbsp; Audit Trail Demo</div>
+
+
+<!-- ══════════════════════════════════════════
+     PAGE 2 — .log Audit Trail
+════════════════════════════════════════════ -->
+<div class="poster">
+  <div class="hdr">
+    <div>
+      <h1>Audit Trail &nbsp;<em>·</em>&nbsp; <code style="font-size:22px;background:rgba(255,255,255,0.1);padding:2px 10px;border-radius:6px;font-weight:400;">.log</code>&nbsp; 追蹤範例</h1>
+      <div class="sub">每次 Agent 執行後，自動寫入與 Word 文件同路徑的 .log sidecar — 來源 / 財務 tool call / 數字換算 / 前提驗證，全程可追</div>
+    </div>
+    <div class="hdr-right">
+      任務範例<br>
+      <strong>Tesla（TSLA）財務查詢</strong><br>
+      <span style="font-size:10.5px;">company_info agent &nbsp;·&nbsp; Q1=Y / Q2=[4 tools]</span>
+    </div>
+  </div>
+
+  <div class="p2-body">
+
+    <!-- Terminal -->
+    <div class="terminal-panel">
+      <div class="t-title">sample.log &nbsp;—&nbsp; 2026.05.22_Tesla財務表現_Justin.log</div>
+
+      <!-- Header -->
+      <div><span class="lhdr">=== company_info_agent ===</span></div>
+      <div><span class="lkey">Time:  </span><span class="lval">2026-05-22 14:12:03</span></div>
+      <div><span class="lkey">Task:  </span><span class="lval">查 Tesla（TSLA）Q1 2026 財報表現、近期股價走勢與主要機構持股</span></div>
+      <div><span class="lkey">Intern:</span><span class="lval"> Justin</span></div>
+      <div>&nbsp;</div>
+
+      <!-- ① Search Queries & Sources -->
+      <div class="hl-section hl-1">
+        <div><span class="anno-badge ab-1">①</span><span class="ldiv">--- Search Queries ---</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">1. Tesla TSLA Q1 2026 earnings revenue profit results</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">2. Tesla Q1 2026 earnings call transcript investor presentation</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">3. Tesla delivery numbers production outlook 2026 full year</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">4. TSLA analyst rating price target Morgan Stanley 2026</span></div>
+        <div>&nbsp;</div>
+        <div><span class="ldiv">--- Sources ---</span></div>
+        <div><span class="lval">[Q1] Tesla TSLA Q1 2026 earnings revenue profit results</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">1. Tesla Reports First Quarter 2026 Financial Results</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="lurl">https://ir.tesla.com/news-releases/2026-q1-results</span>&nbsp;&nbsp;<span class="lsc">| score=0.934</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">2. Tesla Q1 2026: Revenue Misses, EV Deliveries Disappoint — Reuters</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="lurl">https://reuters.com/technology/tesla-q1-2026-results</span>&nbsp;&nbsp;<span class="lsc">| score=0.891</span></div>
+        <div><span class="lval">[Q2] Tesla Q1 2026 earnings call transcript investor presentation</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">1. Tesla Q1 2026 Earnings Call Transcript — Seeking Alpha</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="lurl">https://seekingalpha.com/article/tsla-q1-2026-earnings-call</span>&nbsp;&nbsp;<span class="lsc">| score=0.876</span></div>
+      </div>
+      <div>&nbsp;</div>
+
+      <!-- ② Financial Tool Calling -->
+      <div class="hl-section hl-2">
+        <div><span class="anno-badge ab-2">②</span><span class="ldiv">--- Financial Data (TSLA | yfinance: stock_price, financials, key_metrics, holders) ---</span></div>
+        <div><span class="lval">[stock_price]</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">{</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"symbol"</span><span class="lval">: "TSLA",&nbsp;&nbsp;</span><span class="lkey">"as_of"</span><span class="lval">: </span><span class="lzh">"2026-05-21"</span><span class="lval">,</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"current_price"</span><span class="lval">: 285.4,&nbsp;&nbsp;</span><span class="lkey">"change_3mo_pct"</span><span class="lval">: -8.62,</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"high_3mo"</span><span class="lval">: 356.3,&nbsp;&nbsp;</span><span class="lkey">"low_3mo"</span><span class="lval">: 234.8,</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"week52_high"</span><span class="lval">: 479.86,&nbsp;&nbsp;</span><span class="lkey">"week52_low"</span><span class="lval">: 182.43,&nbsp;&nbsp;</span><span class="lkey">"currency"</span><span class="lval">: "USD",&nbsp;&nbsp;</span><span class="lkey">"_source"</span><span class="lval">: "yfinance"</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">}</span></div>
+        <div><span class="lval">[financials]</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">{</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"income_stmt_latest_q"</span><span class="lval">: {&nbsp;"Total Revenue": 19340000000.0,&nbsp;"Gross Profit": 3971000000.0,&nbsp;"Net Income": 409000000.0&nbsp;},</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"balance_sheet_latest_q"</span><span class="lval">: {&nbsp;"Total Assets": 98200000000.0,&nbsp;"Cash And Cash Equivalents": 16880000000.0&nbsp;},</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"period_end"</span><span class="lval">: {&nbsp;</span><span class="lzh">"income_stmt_latest_q": "2026-03-31"</span><span class="lval">,&nbsp;</span><span class="lzh">"balance_sheet_latest_q": "2026-03-31"</span><span class="lval">&nbsp;},</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"_source"</span><span class="lval">: "yfinance"</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">}</span></div>
+        <div><span class="lval">[key_metrics]</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">{</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"marketCap"</span><span class="lval">: 912340000000,&nbsp;&nbsp;</span><span class="lkey">"trailingPE"</span><span class="lval">: 72.3,&nbsp;&nbsp;</span><span class="lkey">"forwardPE"</span><span class="lval">: 58.4,</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"enterpriseToEbitda"</span><span class="lval">: 32.1,&nbsp;&nbsp;</span><span class="lkey">"beta"</span><span class="lval">: 2.14,&nbsp;&nbsp;</span><span class="lkey">"grossMargins"</span><span class="lval">: 0.2053,&nbsp;&nbsp;</span><span class="lkey">"revenueGrowth"</span><span class="lval">: -0.089,</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lkey">"as_of"</span><span class="lval">: </span><span class="lzh">"2026-05-22 14:12:09"</span><span class="lval">,&nbsp;&nbsp;</span><span class="lkey">"_source"</span><span class="lval">: "yfinance"</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">}</span></div>
+        <div><span class="lval">[holders]</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">{&nbsp;</span><span class="lkey">"latest_reported"</span><span class="lval">: </span><span class="lzh">"2026-03-31"</span><span class="lval">,&nbsp;</span><span class="lkey">"institutional_holders"</span><span class="lval">: [</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lval">{"Holder": "Vanguard Group Inc",&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="lkey">"Shares"</span><span class="lval">: 244892000,&nbsp;</span><span class="lkey">"% Out"</span><span class="lval">: 0.0772},</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lval">{"Holder": "Blackrock Inc.",&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="lkey">"Shares"</span><span class="lval">: 177630000,&nbsp;</span><span class="lkey">"% Out"</span><span class="lval">: 0.0560},</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;<span class="lval">{"Holder": "State Street Corporation",&nbsp;</span><span class="lkey">"Shares"</span><span class="lval">: 100234000,&nbsp;</span><span class="lkey">"% Out"</span><span class="lval">: 0.0316}</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">],&nbsp;</span><span class="lkey">"_source"</span><span class="lval">: "yfinance"&nbsp;}</span></div>
+      </div>
+      <div>&nbsp;</div>
+
+      <!-- ③ Numbers Layer -->
+      <div class="hl-section hl-3">
+        <div><span class="anno-badge ab-3">③</span><span class="ldiv">--- Extracted Numbers (Haiku echo → Python convert) ---</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">Q1 2026 總營收 :</span> <span class="lraw">raw='"193.4 億美元"'</span>&nbsp;&nbsp;→&nbsp;&nbsp;<span class="lzh">zh='"193.4 億美元"'</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">Q1 2026 淨利潤 :</span> <span class="lraw">raw='"4.09 億美元"'</span>&nbsp;&nbsp;→&nbsp;&nbsp;<span class="lzh">zh='"4.09 億美元"'</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">市值           :</span> <span class="lraw">raw='"9,123 億美元"'</span>&nbsp;&nbsp;→&nbsp;&nbsp;<span class="lzh">zh='"9,123 億美元"'</span></div>
+        <div>&nbsp;&nbsp;<span class="lval">52 週最高股價  :</span> <span class="lraw">raw='"479.86 美元"'</span>&nbsp;&nbsp;→&nbsp;&nbsp;<span class="lzh">zh='"479.86 美元"'</span></div>
+      </div>
+      <div>&nbsp;</div>
+
+      <!-- ④ Premise Validation -->
+      <div class="hl-section hl-4">
+        <div><span class="anno-badge ab-4">④</span><span class="ldiv">--- Premise Validation ---</span></div>
+        <div><span class="lval">Premises：</span><span class="lok">✓ [confirmed]</span><span class="lval"> Tesla 有公布 Q1 2026 財報</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="lnote">url: https://ir.tesla.com/news-releases/2026-q1-results</span></div>
+        <div><span class="lval">Deliverables：</span></div>
+        <div>&nbsp;&nbsp;<span class="lok">✓ [answered]</span><span class="lval"> Q1 2026 營收&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="lnote">note: 193.4 億美元（period_end 2026-03-31），yfinance 確認</span></div>
+        <div>&nbsp;&nbsp;<span class="lok">✓ [answered]</span><span class="lval"> 近期股價走勢&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="lnote">note: 現價 285.4，3 月前 312.1，-8.62%（as_of 2026-05-21）</span></div>
+        <div>&nbsp;&nbsp;<span class="lok">✓ [answered]</span><span class="lval"> 主要機構持股&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span><span class="lnote">note: Vanguard 7.72%、Blackrock 5.60%（latest_reported 2026-03-31）</span></div>
+        <div>&nbsp;&nbsp;<span class="lpart">△ [partial]</span><span class="lval"> &nbsp;利潤率 YoY 比較&nbsp;&nbsp;</span><span class="lnote">note: Q1 2026 毛利率 20.5% 確認；YoY 比較受限於單季資料範圍</span></div>
+      </div>
+      <div>&nbsp;</div>
+
+      <!-- Output -->
+      <div><span class="ldiv">--- Output ---</span></div>
+      <div><span class="lkey">File: </span><span class="lval">.../output/2026.05.22_Tesla財務表現_Justin.docx</span></div>
+    </div><!-- /terminal-panel -->
+
+    <!-- Annotation panel -->
+    <div class="anno-panel">
+      <div class="ap-title">追蹤能力說明</div>
+
+      <!-- ① -->
+      <div class="anno-card ac-1">
+        <div class="ac-header"><span class="anno-badge ab-1">①</span><span class="ac-title">Tavily 來源追蹤</span></div>
+        <div class="ac-body">
+          每條 query 對應的 <strong>URL + relevance score</strong> 全部記錄。報告引用了哪些來源、搜了幾輪，完整可查。score 由 Tavily 計算，分數低的來源校稿時重點審查。
+        </div>
+        <span class="ac-tag blue">4 queries &nbsp;·&nbsp; 6 sources logged</span>
+      </div>
+
+      <!-- ② -->
+      <div class="anno-card ac-2">
+        <div class="ac-header"><span class="anno-badge ab-2">②</span><span class="ac-title">Financial Tool Calling</span></div>
+        <div class="ac-body">
+          <code style="font-size:10px;background:#FFFBEB;padding:1px 5px;border-radius:3px;">check_financial_need</code> 讓 Haiku 決定呼叫哪些 yfinance 工具（Q2），<code style="font-size:10px;background:#FFFBEB;padding:1px 5px;border-radius:3px;">fetch_financial_data</code> 自動抓取。<br><br>
+          每個工具輸出含 <strong>as_of</strong>（股價 / 指標）或 <strong>period_end</strong>（財報）時間戳，數字有明確日期，不是模型自行推測。
+        </div>
+        <span class="ac-tag amber">stock_price · financials · key_metrics · holders</span>
+      </div>
+
+      <!-- ③ -->
+      <div class="anno-card ac-3">
+        <div class="ac-header"><span class="anno-badge ab-3">③</span><span class="ac-title">數字換算 Audit</span></div>
+        <div class="ac-body">
+          <strong>raw</strong>（Haiku verbatim echo）與 <strong>zh</strong>（Python 確定性換算）並排。<br>
+          912B → 9,123億、19.34B → 193.4億，可逐行核對有無差 10 倍。
+        </div>
+        <span class="ac-tag yellow">防 LLM 把 billion 誤算成億</span>
+      </div>
+
+      <!-- ④ -->
+      <div class="anno-card ac-4">
+        <div class="ac-header"><span class="anno-badge ab-4">④</span><span class="ac-title">前提 & 覆蓋度驗證</span></div>
+        <div class="ac-body">
+          每個任務斷言與問題標 <span style="color:#34D399;font-weight:700;">✓</span> / <span style="color:#EAB308;font-weight:700;">△</span> / <span style="color:#F87171;font-weight:700;">✗</span>。<strong>[missing]</strong> 強制報告明寫「資料不足」，禁止用空洞詞彙替代。
+        </div>
+        <span class="ac-tag orange">防 LLM 用沾邊事實填空</span>
+      </div>
+
+      <!-- Impact -->
+      <div class="impact-box">
+        <div class="ib-title">設計理念</div>
+        <p>Word 文件給老闆看，<span style="color:#F47920;font-weight:700;">.log 給自己做品管</span>。這個數字從哪來？哪個工具幾號抓的？這個前提有沒有 evidence？從根源阻止 hallucination 滲入最終報告。</p>
+      </div>
+
+    </div><!-- /anno-panel -->
+  </div><!-- /p2-body -->
+
+  <div class="ftr">
+    <span>Audit Trail Demo &nbsp;·&nbsp; <span class="or">張鈞傑 Justin</span> &nbsp;·&nbsp; FCC-mas 2026</span>
+    <span>.log 與 .docx 同路徑，同檔名，自動產生</span>
+  </div>
+</div><!-- /page 2 -->
+
+</body>
+</html>

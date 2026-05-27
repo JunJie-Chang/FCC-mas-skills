@@ -2,11 +2,23 @@
 utils/financial_tools.py — Financial data fetchers (yfinance + FinanceDatabase).
 
 Each public function returns a dict. On failure it returns {"error": "<reason>"}
-instead of raising, so the agent can always continue gracefully.
+instead of raising, so callers can always continue gracefully.
 
-Tool catalogue split by data source:
-  YFINANCE_TOOL_DESCRIPTIONS  → Q2, triggered when Q1=Y (specific listed company)
-  SECTOR_TOOL_DESCRIPTIONS    → Q3, triggered for industry/sector discovery
+Callable from `fcc-company-info` skill via Bash:
+
+    python3.13 -c "
+    import json, sys
+    sys.path.insert(0, '/Users/junjie/Desktop/Internship/FCC/FCC-mas')
+    from utils.financial_tools import fetch_all
+    print(json.dumps(fetch_all('TSLA',
+        tools=['stock_price','financials','key_metrics','holders','news']),
+        default=str, ensure_ascii=False))
+    "
+
+The skill chooses the ticker itself; this module no longer normalizes
+company names via Haiku (removed during Skills migration in May 2026).
+Pass a ticker that matches the yfinance format directly. Shanghai .SH
+inputs are auto-canonicalized to .SS.
 
 Rate limiting: _CALL_DELAY seconds are inserted between successive API calls.
 """
@@ -124,17 +136,6 @@ _VALID_TICKER_RE = re.compile(
     r")$"
 )
 
-# Inline-ticker pre-filter: matches numeric-prefixed tickers with explicit
-# market suffix in raw instruction text. We deliberately skip US plain-letter
-# patterns ("AI", "USA") to avoid false positives — for US instructions Haiku
-# is reliable. Catches the 工業富聯（601138.SH）case where the literal ticker
-# is in the instruction but Haiku #2 hallucinated a different one (601231.SS).
-_TICKER_INLINE_RE = re.compile(
-    r"\b(\d{3,6}\.(?:SS|SH|SZ|TW|TWO|HK))\b",
-    re.IGNORECASE,
-)
-
-
 def _canonicalize_ticker(ticker: str) -> str:
     """
     Map ticker to yfinance-compatible form. Idempotent.
@@ -154,236 +155,6 @@ def _is_valid_ticker_format(ticker: str) -> bool:
     if not ticker or not isinstance(ticker, str):
         return False
     return bool(_VALID_TICKER_RE.match(ticker.strip().upper()))
-
-
-def _extract_inline_tickers(text: str) -> list[str]:
-    """
-    Find ticker-like tokens (e.g. '601138.SH', '2317.TW') literally present in
-    raw text. Returns canonicalized (.SH → .SS) uppercase strings, dedup.
-    """
-    if not text:
-        return []
-    seen: set[str] = set()
-    out: list[str] = []
-    for m in _TICKER_INLINE_RE.finditer(text):
-        canon = _canonicalize_ticker(m.group(1))
-        if canon not in seen:
-            seen.add(canon)
-            out.append(canon)
-    return out
-
-
-def _haiku_normalize_ticker(
-    company_name: str, task_context: str = "", strict: bool = True,
-) -> str | None:
-    """
-    Ask Haiku to output a market-correct ticker directly from a company name
-    (handles 中/英文 + 跨市場 suffix: .TW/.TWO/.HK/.SZ/.SS/純字母 US).
-
-    Args:
-        strict: When True (default), only accept confidence='high' AND ticker
-                matching a known market-suffix pattern. When False, accept
-                medium-confidence too and skip format check.
-
-    Returns None when Haiku is unsure — caller should (in strict mode) accept
-    the rejection rather than fall through to fuzzy matching.
-    """
-    import json as _json
-    import os
-    import re
-    try:
-        from anthropic import Anthropic
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-        import config
-    except Exception:
-        return None
-
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return None
-
-    prompt = f"""判斷下列資訊指向哪一間「單一」上市公司的股票代碼。
-
-公司候選：{company_name}
-任務內容：{task_context or '(無)'}
-
-【硬規則 — 任務必須有金融意圖才回 ticker】
-
-主流程：先看「公司候選 + 任務內容」是否確實在問**市場 / 財務數字**。
-- 是 → 解析 ticker（按下方中文意譯規則）
-- 否 → ticker=null，不需再思考
-
-判定「金融意圖」由你判斷，不限關鍵字。下列為**示範**：
-
-✓ 有金融意圖（回 ticker）：
-   「Apple 最新一季財報營收」→ AAPL（明確問財報）
-   「NVDA 股價走勢與市值」→ NVDA（股價 / 市值）
-   「台積電 2026 Q1 財報數字」→ 2330.TW（季報數字）
-   「比較 GME 跟 EBAY 市值」→ 各家 ticker（市值比較）
-   「Tesla 估值合理嗎」→ TSLA（估值）
-
-❌ 無金融意圖（回 null，即使主體可能是上市公司）：
-   「查 Money & You 的基本資訊」→ null（主體像課程 / 純業務）
-   「介紹 BNI 商會」→ null（商會）
-   「林偉賢的背景」→ null（人物）
-   「AIGC實戰營是什麼」→ null（課程）
-   「查 Apple 公司業務狀況」→ null（純業務面，沒問任何財務數字）
-   「介紹台積電的越南設廠進度」→ null（業務佈局，不是市場資料）
-
-判斷重點：任務在問「市場 / 財務數字」還是「業務 / 背景介紹」？前者才 return ticker。
-
-【硬規則 — 任務內容為空時】
-若「任務內容」欄位是 '(無)' 或空字串，無法判金融意圖，ticker=null。
-
-【硬規則 — 中文公司名不得意譯】
-- 不要把中文公司名拆字翻成英文常見字後，去找「碰巧同名」的英文公司
-  ❌ 「巨漢」→ Giant → 誤對應「巨大機械 9921 Giant Bicycles」（巨漢實際為 6903 巨漢系統科技）
-  ❌ 「佰維」→ Hundred → 應為官方英文 "BIWIN"（688525.SS 佰維存儲）
-  ❌ 「智伸」→ Wisdom / Wise → 應為官方英文 "Joen Lih"（4551.TW 智伸科）
-  ❌ 「國霖」→ Guolin / National Lin
-- 只在 high-confidence 知道該公司有官方英文名（港交所英文名 / SEC filing 英文名 / 公司官網英文 logo）時，才能用英文形態思考
-- 不確定官方英文名 → 直接以中文公司名查 ticker；查不到就 confidence=low → null
-- 寧可 null 也不要把「字面翻譯後剛好存在的另一家上市公司」的 ticker 套上去
-
-【市場 / 後綴規則】
-- 台股上市 .TW、上櫃 .TWO；港股 .HK；陸股深圳 .SZ、上海 .SS；美股純字母（如 TSLA、NVDA）；日股 .T；韓股 .KS
-
-【信心門檻】
-- 若資訊指向的是產業、地區、或多家公司，ticker=null
-- 不確定就 null，不要亂猜；confidence=low 時也視為 null
-- 回傳純 JSON，無 markdown 包裝
-
-格式：{{"ticker": "XXXX.YY" | null, "confidence": "high" | "medium" | "low"}}
-"""
-
-    try:
-        client = Anthropic(api_key=api_key)
-        message = client.messages.create(
-            model=config.LLM_FAST,
-            max_tokens=120,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        # Log cost if tracker is available
-        try:
-            from utils.cost_tracker import tracker
-            tracker.record_claude(config.LLM_FAST, message.usage.input_tokens, message.usage.output_tokens)
-        except Exception:
-            pass
-
-        text = message.content[0].text.strip()
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        # Haiku tends to add a `**判斷說明：**` prose block after the JSON;
-        # use raw_decode so it parses one complete JSON value and ignores
-        # everything trailing (greedy `re.search(r"\{[\s\S]*\}", ...)`
-        # over-matched into the explanation and broke parsing intermittently).
-        idx = text.find("{")
-        if idx < 0:
-            return None
-        data, _ = _json.JSONDecoder().raw_decode(text[idx:])
-        ticker = data.get("ticker")
-        confidence = data.get("confidence", "low")
-        if not ticker:
-            return None
-        # Confidence threshold: strict requires "high"; legacy accepts medium too
-        allowed_conf = ("high",) if strict else ("high", "medium")
-        if confidence not in allowed_conf:
-            return None
-        # Format gate: strict mode rejects anything that doesn't look like a ticker
-        if strict and not _is_valid_ticker_format(ticker):
-            print(f"[financial_tools] ⚠ rejecting Haiku ticker {ticker!r} (format)")
-            return None
-        return ticker
-    except Exception as exc:
-        print(f"[financial_tools] ⚠ Haiku ticker normalize failed: {exc}")
-
-    return None
-
-
-def resolve_ticker(
-    company_name: str, task_context: str = "", strict: bool = True,
-) -> str | None:
-    """
-    Try to find a ticker symbol for company_name.
-
-    Resolution order (strict mode):
-      Strategy -1: Inline ticker prefilter — if task_context contains a literal
-                   ticker pattern (e.g. '601138.SH'), use it directly. Bypasses
-                   Haiku entirely. Prevents the #17 case where Haiku hallucinated
-                   601231.SS for an instruction literally containing 601138.SH.
-      Strategy 0:  Haiku normalizer (high-confidence + valid format).
-                   Cross-checked against any inline tickers — if Haiku output
-                   conflicts with an inline ticker that's literally in the
-                   instruction, the Haiku output is rejected.
-
-    strict=False (legacy / discovery use): three-tier fallback —
-      Strategy 0: Haiku normalizer (medium+ confidence accepted)
-      Strategy 1: yfinance Search (fuzzy, covers most major markets)
-      Strategy 2: FinanceDatabase equity search (broader but slower)
-
-    Returns the symbol string (canonicalized, e.g. .SS), or None if not resolvable.
-    """
-    # Strategy -1 — inline ticker prefilter (instruction字面值優先)
-    # Searches both company_name (might already contain ticker like "工業富聯（601138.SH）")
-    # and the broader task_context.
-    inline_tickers = _extract_inline_tickers(f"{company_name} {task_context}")
-    if inline_tickers:
-        sym = inline_tickers[0]
-        if _is_valid_ticker_format(sym):
-            print(f"[financial_tools] inline ticker → {sym}")
-            return sym
-
-    # Strategy 0 — Haiku normalizer (works in both modes)
-    symbol = _haiku_normalize_ticker(company_name, task_context, strict=strict)
-    if symbol:
-        canon = _canonicalize_ticker(symbol)
-        # Cross-check: if Haiku gave a ticker that conflicts with one literally
-        # in the instruction, prefer the literal (or refuse). This catches the
-        # case where Haiku #2 hallucinates a different but plausible ticker.
-        if inline_tickers and canon not in inline_tickers:
-            print(
-                f"[financial_tools] ⚠ Haiku ticker {canon} conflicts with "
-                f"inline ticker(s) {inline_tickers}; using inline"
-            )
-            return inline_tickers[0]
-        print(f"[financial_tools] Haiku → {canon}")
-        return canon
-
-    if strict:
-        # No fuzzy fallback in strict mode — caller will skip financial fetching
-        return None
-
-    # Strategy 1 — yfinance Search
-    def _yf_search():
-        import yfinance as yf
-        results = yf.Search(company_name, max_results=5).quotes
-        if results:
-            return results[0].get("symbol")
-        return None
-
-    symbol = _safe(_yf_search)
-    if symbol and not isinstance(symbol, dict):  # dict means {"error": ...}
-        return symbol
-
-    time.sleep(_CALL_DELAY)
-
-    # Strategy 2 — FinanceDatabase
-    def _fd_search():
-        import financedatabase as fd
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            equities = fd.Equities()
-            matches = equities.search(company_name)
-        if not matches.empty:
-            return matches.index[0]
-        return None
-
-    symbol = _safe(_fd_search)
-    if symbol and not isinstance(symbol, dict):
-        return symbol
-
-    return None
 
 
 # ── Individual data fetchers ──────────────────────────────────────────────────
@@ -606,8 +377,9 @@ def fetch_all(symbol: str, tools: list[str]) -> dict:
     Returns {"ticker": symbol, "tool_id": data_dict, ...}.
     Unknown tool ids are skipped with a warning.
 
-    Symbol is canonicalized to yfinance form (.SH → .SS) before fetch — direct
-    tickers from check_financial_need (Haiku #1) may carry .SH from instructions.
+    Symbol is canonicalized to yfinance form (.SH → .SS) before fetch —
+    .SH is used by 同花順 / 新浪財經 / instructions but yfinance only
+    accepts .SS for SSE-listed symbols.
     """
     canon = _canonicalize_ticker(symbol)
     if canon != symbol:

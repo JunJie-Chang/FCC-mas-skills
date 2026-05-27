@@ -1,6 +1,6 @@
-# Environment
+# Environment — actual .env is per-machine; .env.example IS committed
 .env
-.env.*
+!.env.example
 
 # Python
 __pycache__/
@@ -11,29 +11,13 @@ __pycache__/
 # Output files
 output/
 
-# Web layer — SQLite + transient generated assets
-web/api/data/*.db
-web/api/data/*.db-journal
-web/api/data/*.db-wal
-web/api/data/*.db-shm
-web/api/uploads/*/
-web/api/uploads/**/*.m4a
-web/api/uploads/**/*.mp3
-web/api/uploads/**/*.wav
-web/api/uploads/**/*.aiff
-web/api/uploads/**/*.webm
-web/api/uploads/**/*.ogg
-web/api/uploads/**/*.opus
-web/api/uploads/**/*.flac
+# Installer log
+/tmp/fcc-mas-pip.log
+
+# Claude Code — keep skills/ tracked, ignore everything else
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # macOS
 .DS_Store
-
-# Claude Code
-.claude/
-
-#Issue
-Issues.md
-
-# Local batch run scripts
-run_tasks.sh

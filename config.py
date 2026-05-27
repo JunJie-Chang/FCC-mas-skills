@@ -1,6 +1,11 @@
 """
-config.py — Format settings and paths only.
-API keys are in .env (loaded via python-dotenv in each module that needs them).
+config.py — Word/PPTX format settings and output paths.
+
+All LLM call sites were removed when the project migrated from LangGraph
+agents to Claude Code Skills (May 2026). Skills run inside a Claude Code
+session and don't instantiate their own Anthropic clients, so model IDs
+and API keys no longer live here. STT/DALL-E still use OPENAI_API_KEY
+(loaded from .env in utils/stt.py and scripts/build_pptx_cli.py).
 """
 import os
 
@@ -22,30 +27,13 @@ MARGIN_BOTTOM_CM = 2.5
 MARGIN_LEFT_CM = 3.2
 MARGIN_RIGHT_CM = 3.2
 
-# ── LLM models ────────────────────────────────────────────────────────────────
-LLM_MAIN      = "claude-opus-4-6"               # medium mode / complex synthesis
-LLM_SYNTHESIS = "claude-sonnet-4-6"             # short mode synthesis (lower cost)
-LLM_FAST      = "claude-haiku-4-5-20251001"     # classification / query gen / eval
-
 # ── Paths ─────────────────────────────────────────────────────────────────────
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output")
 DOWNLOADS_DIR = os.path.expanduser("~/Downloads")
 
+# Set FCC_DISABLE_DOWNLOADS_COPY=1 to skip the auto-copy of every output
+# .docx/.pptx into ~/Downloads. Read once at import; no hot-reload needed.
+DISABLE_DOWNLOADS_COPY = os.environ.get("FCC_DISABLE_DOWNLOADS_COPY", "").lower() in ("1", "true", "yes")
+
 # ── Defaults ──────────────────────────────────────────────────────────────────
 DEFAULT_INTERN_NAME = "Justin"
-
-
-# ── Time anchor for LLM prompts ──────────────────────────────────────────────
-def time_context() -> str:
-    """
-    Inject current-year anchor into LLM prompts so the model doesn't fall back
-    to its training-cutoff default (often 2024). Use at the top of every prompt
-    that touches dates, "最新", "最近一季", relative time, or financial periods.
-    """
-    from datetime import date
-    y = date.today().year
-    return (
-        f"【時間基準】現在是 {y} 年。t = {y}（本年度）；"
-        f"t-1 = {y-1}；t-2 = {y-2}。"
-        f"凡是「最新」「最近一季」「去年」「年初至今」等相對時間，以此為準。"
-    )

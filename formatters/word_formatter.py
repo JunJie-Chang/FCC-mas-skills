@@ -559,8 +559,10 @@ class WordBuilder:
         dest = base / filename
         self._doc.save(str(dest))
 
-        # Auto-copy to ~/Downloads
-        dl_path = Path(config.DOWNLOADS_DIR) / filename
-        shutil.copy2(dest, dl_path)
+        # Auto-copy to ~/Downloads (skipped in server mode — interns
+        # fetch via /api/jobs/{id}/download, not from the host's disk).
+        if not config.DISABLE_DOWNLOADS_COPY:
+            dl_path = Path(config.DOWNLOADS_DIR) / filename
+            shutil.copy2(dest, dl_path)
 
         return dest

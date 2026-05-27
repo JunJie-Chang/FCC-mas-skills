@@ -3,392 +3,120 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
-FCC Partners 實習生日常工作流程的 Multi-Agent System。
-CY（老闆）口述指令 → STT → Planner → 確認 → Agents → Word 輸出。
+FCC Partners 實習生日常工作流程自動化系統。
+
+CY（老闆）口述指令 → Claude Code session 內讀 skill → 執行（搜尋 / 抓財務 / 翻譯 / 整理）→ Word / PowerPoint 輸出。
+
+**架構演進**：2026 年 5 月之前是 LangGraph + FastAPI 多 agent 系統；之後重構成 Claude Code Skills（純本機、無 API 後端、單人 Claude Code 使用）。重構紀錄見 `/Users/junjie/.claude/plans/skills-api-skills-person-info-company-i-federated-aurora.md`。
 
 ## Environment
-- Python: system Python 3.13 (`/Library/Frameworks/Python.framework/Versions/3.13`)
-- `.venv` 存在但未使用（packages 裝在 system Python）
-- `.env` 有 `ANTHROPIC_API_KEY`、`TAVILY_API_KEY`、`OPENAI_API_KEY`
-- **重要**：所有 `load_dotenv()` 必須用 `override=True`，否則 shell 中已有空字串的 env var 會擋住 `.env` 的值
+- **Python**：system Python 3.13 (`/Library/Frameworks/Python.framework/Versions/3.13`)
+- `.env`：只需 `OPENAI_API_KEY`（STT + DALL-E 用）。`ANTHROPIC_API_KEY` 不再需要（Claude 在 Claude Code session 內執行）。`TAVILY_API_KEY` 不再需要（skill 直接呼叫 `tavily-*` skill 或 WebSearch 工具）。
+- 所有 `load_dotenv()` 必須用 `override=True`，否則 shell 中已有空字串的 env var 會擋住 `.env` 的值
 - **系統依賴**：`ffmpeg` / `ffprobe`（STT 對 >4 分鐘音檔切片用，見 `utils/stt.py`）；未安裝時長音檔轉錄會失敗（`brew install ffmpeg`）
 
-## CLI Usage
-```bash
-# STT 全流程（錄音 → 自動分類 → 執行）
-python3.13 main.py --audio '/path/to/recording.m4a' --intern "Justin"
+## Skills（7 個）
 
-# 文字輸入，混合任務
-python3.13 main.py --input "查 Tesla；另外查林志明" --intern "Justin"
+放在 `.claude/skills/`（per-project，與 repo 一起 commit）。使用者在 Claude Code session 內輸入請求，Claude 依 description 自動觸發對應 skill，或使用者顯式輸入 `/<skill-name>`。
 
-# 指定 agent 類型（跳過 haiku 分類）
-python3.13 main.py --input "調查林志明" --type person_info --intern "Justin"
-
-# 報告模式（預設 short）
-python3.13 main.py --audio ... --intern "Justin" --mode short    # 約兩頁，嚴格回應需求
-python3.13 main.py --audio ... --intern "Justin" --mode medium   # 延伸分析完整版
-
-# 翻譯快速入口（stdin 貼文章）
-python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin
-python3.13 translate.py "Article Title" SourceName 2026-04-15 "Justin,Neil"   # 多人用 comma 分隔
-# → 貼文章，輸入 END + Enter 結束
-
-# 翻譯 + OCR（圖片或 PDF，例如 iPhone AirDrop 截圖）
-python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --image ~/Downloads/IMG_xxxx.JPG
-python3.13 translate.py "Article Title" SourceName 2026-04-15 Justin --pdf ~/Downloads/article.pdf
-# PDF 需先安裝：pip install pymupdf
-
-# 直接跑單一 agent
-python3.13 agents/company_info_agent.py --task "查 Tesla" --intern "Justin"
-
-# Podcast agent 直接執行（--questions 用分號分隔，不是 JSON array）
-python3.13 agents/podcast_agent.py \
-  --topic "全球媒體產業" \
-  --questions "問題1; 問題2; 問題3" \
-  --intern "Justin"
-
-# 口述清稿（去除廢話與開頭語）
-python3.13 agents/verbal_cleanup_agent.py --audio ~/Downloads/recording.m4a --intern "Justin"
-python3.13 agents/verbal_cleanup_agent.py --text "嗯好那個今天想說的是..." --intern "Justin"
-python3.13 main.py --audio recording.m4a --type verbal_cleanup --intern "Justin"
-
-# 演講 PPT（結構化頁自動生成；非結構化頁 echo notes 給操作者）
-python3.13 agents/speech_ppt_agent.py --audio ~/Downloads/recording.m4a --intern "Justin"
-python3.13 agents/speech_ppt_agent.py --audio ~/Downloads/recording.m4a --topic "台中智慧製造" --intern "Justin"
-python3.13 agents/speech_ppt_agent.py --text "第一頁：智慧製造定義..." --intern "Justin" --no-images
-python3.13 main.py --audio recording.m4a --type speech_ppt --intern "Justin"
-```
-
-## Tech Stack
-- LangGraph（每個 agent 都是獨立 graph）
-- Anthropic Claude：`LLM_MAIN = claude-opus-4-6`，`LLM_FAST = claude-haiku-4-5-20251001`
-- Tavily（web search）
-- yfinance + FinanceDatabase（財務資料，`utils/financial_tools.py`）
-- OpenAI gpt-4o-transcribe（STT，透過 `utils/stt.py`；LLM-backed ASR，中文同音專有名詞辨識優於舊版 whisper-1）
-- python-docx（Word 輸出，透過 `formatters/word_formatter.py`）
-
-## Architecture
-
-### 主流程：`main.py → router.py → agent`
-
-```
-STT (utils/stt.py)
-    ↓
-subject_review (utils/subject_review.py) — 只在 --audio 路徑跑；--yes 跳過
-    ↓
-parse_tasks() (utils/planner.py) — haiku 解析 + 分類，max_tokens=4096
-    ↓
-confirm() — CLI 互動：y 確認 / n 取消 / [數字] 修改 / d[數字] 刪除 / a 新增 / m a,b[,c] 合併
-    ↓
-router.dispatch(task, intern_name, task_date, subdir, mode)
-    ↓
-agent.run(...)  →  WordBuilder.save()  →  output/ + ~/Downloads
-```
-
-**STT subject review（`utils/subject_review.py`）**：Whisper 轉錄完之後跑一次 Haiku 抽出轉錄文中的專有名詞主體（公司 / 人名 / 機構 / 課程），給每個主體標 suspect（疑似 STT 錯字）+ 前後 ~10 字 context。使用者用 CLI 互動逐條確認；輸入 `[編號]` + 新名稱會把該字串在轉錄文中 replace all，Enter 全部正確就繼續。修正後的轉錄文才交給 `parse_tasks`。目的：把 STT 錯字（如「資深客」→「智伸科」、「工業負面」→「工業富聯」）在最上游一刀解掉，避免下游 planner / Tavily / agent 在錯誤字面上做累積誤判。`--input` 路徑不跑（使用者打字本就是有意）；`--yes` 也跳過。成本：每次 1 個 Haiku 呼叫（幾分美元）。
-
-### Agent 清單
-| agent_type | 檔案 | 說明 |
+| Skill | 用途 | Trigger 範例 |
 |---|---|---|
-| `company_info` | `agents/company_info_agent.py` | 公司/機構研究，10-node graph（含財務資料層 + ReAct loop） |
-| `person_info` | `agents/person_info_agent.py` | 人物背景，8-node ReAct loop graph |
-| `translation` | `agents/translation_agent.py` | 翻譯；router 傳 JSON instruction（含 title/source/body_text，`pub_date` 選填，沒給 fallback 今天）；`--body-file` 支援 .jpg/.png/.pdf OCR |
-| `letter`/`meeting` | `agents/dictation_agent.py` | 口述整理，兩種 task_type 共用同一 agent |
-| `verbal_cleanup` | `agents/verbal_cleanup_agent.py` | 口述清稿，去除廢話與開頭語，輸出乾淨書面稿 |
-| `podcast` | `agents/podcast_agent.py` | Podcast 研究；屬 `_MANUAL_ONLY_TYPES`，必須 `--type podcast`；router 傳 raw 原文，agent 內 `parse_instruction` node 用 Haiku 解析 topic/questions；全文抓取走三層 cascade：trafilatura → Tavily extract → Tavily snippet；搜尋用 `topic="news"` 並排除 PDF/Office 檔；extract 的 raw markdown 經 `_strip_extract_boilerplate` 去導航/廣告後才翻譯 |
-| `speech_ppt` | `agents/speech_ppt_agent.py` | 演講 PPT；輸入 CY 口述 transcript；結構化頁自動生成（DALL-E），非結構化頁 echo notes；需 OPENAI_API_KEY |
+| `fcc-company-info` | 公司／機構研究 | 「查 Tesla」「Apple 跟 Foxconn 合作」「NVIDIA deep dive」 |
+| `fcc-person-info` | 人物背景調查 | 「查蔡力行」「Jensen Huang 學經歷」 |
+| `fcc-translation` | 外文翻譯成繁體中文 | 「翻這篇英文」「這張截圖幫我翻」「這個 URL 翻一下」 |
+| `fcc-dictation` | 會議口述整理成會議紀錄 | 「整理這場會議」「會議 minutes」 |
+| `fcc-verbal-cleanup` | 口述清稿（去廢話、留原意） | 「清稿」「把這段廢話清掉」「整理一封信」 |
+| `fcc-podcast` | Podcast 研究蒐集翻譯多篇文章 | 「整理 K-pop podcast 研究」 |
+| `fcc-speech-ppt` | 演講 PPT 生成 | 「把這段演講做成 PPT」 |
+| `fcc-shared` | 共通規則 reference（不獨立觸發） | — |
 
-### Agent 內部結構
+每個 skill 的 SKILL.md 都列出 trigger 範例 + 不適合的情境（指向其他 skill）。`fcc-shared` 集中存放所有 skill 共用的寫作禁忌、Word 格式規範、檔名規範、中文數字單位規則、時間錨點。
 
-**company_info**（11-node LangGraph，ReAct loop + numbers layer）：
-1. `parse_task` — Haiku 產出 research plan（todos 3-6 個問題）+ 初始 queries（推論式設計，搜一手來源）
-2. `check_financial_need` — Haiku Q1/Q2/Q3 分類（見下方 Financial Data Layer）
-3. `fetch_financial_data` — ticker 解析 + yfinance 抓取；**conditional edge**：Q2=[] 跳過
-4. `fetch_sector_data` — FinanceDatabase 產業掃描；Q3.needed=N 時 no-op
-5. `run_search` — 執行初始 batch queries，結果存入 evidence pool
-6. `evaluate` — Haiku 評估每個 todo：done / pending / unresolved；連續 2 輪無新資料自動 done
-7. `next_action` — Haiku 依 todo 狀態決定下一條搜尋 query（或觸發 done）
-8. `execute_search` — 執行單條 query，結果追加 evidence pool；**loop back to evaluate**
-9. `extract_numbers` — Haiku verbatim echo evidence 內所有相關數字 → Python 確定性轉中文字串（見下方 Numbers Layer）
-10. `generate_report` — Sonnet（short）/ Opus（medium）合成 JSON 報告；evidence + `numbers_zh` 注入 context
-11. `format_output` — WordBuilder 渲染 docx，AgentLogger 寫同路徑 `.log`
+## 保留的 Python 工具
 
-**company_info loop 控制**：`MAX_ROUNDS=6`（hard cap）；所有 todo 皆 done 或 unresolved 提前結束；連續 2 輪 0 結果（stall）強制結束
+Skills 透過 Bash 呼叫這些 helper。**不要在 skill 內重新實作這些邏輯**。
 
-**person_info**（9-node LangGraph，同 ReAct loop + numbers layer）：同 company_info，無財務資料層（無 check_financial_need / fetch_financial_data / fetch_sector_data）；`MAX_ROUNDS=5`
-
-**speech_ppt**（4-node LangGraph）：
-1. `parse_script` — opus 解析 transcript，分類每頁為 structured / unstructured；同時推斷演講題目
-2. `confirm_slides` — CLI 互動展示計劃（標題 + bullets + notes 預覽），**確認後才生成 DALL-E**；取消則 END
-3. `generate_images` — DALL-E 3，只對 structured 頁，最多 retry 3 次；`--no-images` 跳過
-4. `build_ppt` — 用 python-pptx 建立 structured 頁（標題 + 5 bullets + 右側圖）；unstructured 頁僅 echo notes 到 console + `.log` sidecar
-
-**speech_ppt 的 planner 特殊規則**：同 `verbal_cleanup`，加入 `_MANUAL_ONLY_TYPES`。Haiku 不自動分類，必須 `--type speech_ppt`。`parse_tasks()` early return：raw transcript 原封不動包成一個 PlanTask，不被 Haiku 改寫。
-
-**speech_ppt 的 confirm_slides vs planner.confirm() 的分工**：
-- `planner.confirm()`（外層）：確認「這個任務要交給 speech_ppt agent 執行」
-- `confirm_slides`（內層，agent 內）：確認「這些投影片標題 + bullets 是否正確」，此時才燒 DALL-E
-
-**PPTX 版面規格**（10.0" × 7.5"，`assets/ppt_chrome_template.pptx` OBJECT layout）：
-- 背景（深藍漸層）、橫線（`#9CC2E5`，y≈1.308in）、右下角 logo、左下角「藍濤亞洲 FCC Partners」標籤、頁碼 placeholder：全部繼承自 OBJECT layout，不需手動加
-- Title textbox：(0.51, 0.40) 8.98 × 0.93 in，28pt，白色（`#FFFFFF`）
-- Bullets textbox（左半）：(0.51, 1.49) 4.70 × 4.31 in，24pt Bold，白色，150% 行距，10pt spcBef，hanging indent，白色 `•` bullet character
-- Image（右半）：(5.45, 1.49) 4.20 × 4.31 in，DALL-E 3 寫實風格，無文字
-- Page num：繼承自 layout sldNum placeholder（自動 field）
-
-**Chrome template 維護**：`assets/ppt_chrome_template.pptx` 存在 repo，從 `_PPT_REFERENCE`（OneDrive 的參考 PPTX）以 `_ensure_chrome_template()` 自動建立。template 不存在時首次執行自動重建；reference PPTX 不在時 fallback 到 blank layout。
-
-### utils/react_loop.py — 共用 ReAct loop
-
-`company_info` 和 `person_info` 共用的搜尋迴圈邏輯，避免重複程式碼。
-
-**Public API**：
-- `run_initial_search(state)` — 執行 parse_task 產出的初始 batch queries，結果存入 evidence pool
-- `next_action(state, max_rounds, search_hint)` — Haiku 決定下一條 query（推論式設計）
-- `execute_search(state)` — 執行單條 query，追加 evidence
-- `evaluate(state)` — Haiku 標記各 todo 為 done / pending / unresolved
-- `should_continue(state, max_rounds)` — conditional edge function，回傳 `"loop"` 或 `"done"`
-
-**常數**：`RESULTS_PER_QUERY=3`、`STALL_ROUNDS=2`
-
-**各 agent 的包裝方式**：每個 agent 定義 `_MAX_ROUNDS` 和 `_SEARCH_HINT` 常數，再用薄包裝函式呼叫 react_loop 的 public API，讓 LangGraph 拿到正確的 TypedDict 型別標注。新增同樣需要 ReAct loop 的 research agent 時直接 import 並包裝，不需修改 react_loop.py。
-
-### router → agent 的 mode 傳遞規則
-- `company_info` / `person_info` / `dictation`：router 用 `**kwargs` 呼叫，State TypedDict 和 `run()` 都必須包含 `mode` 欄位
-- `podcast` / `speech_ppt` / `translation`：router 個別傳參，不走 `**kwargs`，不需要 `mode`
-- 新增走 `**kwargs` 路徑的 agent，`run()` 必須接受 `mode: str = "short"` 以免 TypeError
-
-### Word 格式規範
-由 `formatters/word_formatter.py` 的 `WordBuilder` 統一處理：
-- 字體：微軟正黑體（ascii + eastAsia + hAnsi + cs 四個 slot 都設）
-- Title 14pt Bold；Body 14pt Normal；行距 1.15 multiple
-- 頁面：A4，margins top/bottom=2.5cm, left/right=3.2cm
-- 頁面邊框：四邊 single，sz=12，space=24，offsetFrom=page
-- Header：右對齊「Private & Confidential」，11pt Bold 紅色斜體
-- 表格：`add_table()` 套 `Table Grid` style → 內外四邊細黑線
-- Podcast 文章標題：`add_red_underline_title_with_subtitle(title, subtitle)` 產出紅字 Bold underline 主標 + soft break (`w:br` = shift+enter) + 黑字副標（格式 `YYYY.MM.DD_intern_媒體_作者`，缺欄位略過）
-- `save()` 自動複製到 `~/Downloads`，無 PDF 輸出（已廢棄移除）
-- 命名：`YYYY.MM.DD_TaskName_InternName.docx`（`utils/file_naming.general()` 產生）
-
-### generate_report Prompt 規則（所有 agent 適用）
-- **時間錨點**：所有 prompt 開頭注入 `config.time_context()`（「現在是 YYYY 年；t=YYYY / t-1=... / t-2=...」），避免模型把訓練 cutoff 年份（常為 2024）當作 t
-- 不在任何名詞後加括號標注其他語言的原文或譯名（不論英文、越南文或任何語言）
-- 不在報告內容中提及任務指令的措辭、比喻或身份設定
-- **絕對禁止免責聲明**：不得出現「僅供參考」「請以官方為準」「資料可能有誤」等 hedge / disclaimer
-- **禁用空洞修辭清單**：禁用「成長雙位數」「戰略佈局」「行業領先」「持續優化」等沒有資訊量的詞；必須給具體數字 / 名稱 / 日期，evidence 沒有就明寫「資料不足」
-- **yfinance 引用必附日期**：股價用 `as_of` 欄位，財報數字用 `period_end` 欄位（如「2026 Q1（截至 2026-03-31）」「截至 2026-05-07」）
-- **Short mode**（預設）：1-3 sections，bullets ≤6 條，paragraph ≤150 字，目標兩頁；合成用 `LLM_SYNTHESIS`（Sonnet）
-- **Medium mode**：section 數量不限，可延伸分析；合成用 `LLM_MAIN`（Opus）
-- **Section types**：`bullets`（條列）/ `paragraph`（敘述）/ `table`（多欄比較，含 headers + rows）；Sonnet/Opus 自選最合適的
-- **結構化數字 echo 規則**（rule 9 in prompt）：context 內若有 `[結構化數字]` 區塊，該區塊中文字串為最終格式，必須**逐字 echo**；禁止改寫、禁止重算單位、禁止用「約 / 大約 / 近 / 逾 / 超過」前綴包裹（除非 evidence 本身就有這些字）— 這條規則是 Numbers Layer 的對接點
-
-### Numbers Layer（`utils/number_extract.py` + `utils/unit_convert.py`）
-
-**為什麼存在**：issue #8 case — GameStop/eBay 報告同段內把 "$9.4 billion" 寫成「9.4 億美元」（應為 94 億）。根因是 synthesizer LLM 在長 prose 生成中對「相同量綱重複轉換」會掉位。`extract_numbers → 結構化數字 echo` 把單位換算從 LLM 移出。
-
-**兩步式 pipeline**：
-1. `extract_numbers` node — Haiku **verbatim echo** evidence 內所有任務相關數字，產出 `[{label, raw, value, scale, currency}, ...]`；**禁止計算 / 翻譯 / 推單位**，找不到就漏掉，不准捏造
-2. `utils/unit_convert.to_chinese_amount(value, scale, currency)` — 純 Python 確定性轉換為 `"XX 億美元"` / `"X.X 兆新台幣"` / `"XX%"` 等中文字串
-
-**注入點**：`generate_report` context 的最後一段（在 evidence / financial_data / sector_data 之後），透過 `format_for_prompt(numbers_zh)` 渲染。Synthesizer rule 9 強制 echo。
-
-**Scale 字典**（`SCALE_MULTIPLIERS` in `utils/unit_convert.py`）：`plain / ten_thousand / thousand / million / hundred_million / billion / trillion`，加上 `percent` / `ratio` 兩個 passthrough。
-
-**中英 scale 對應**（issue #16 — 對稱於 #8 的反向 case）：
-- 中文「萬」 → `ten_thousand` (1e4)
-- 中文「億」 → `hundred_million` (1e8)  **← 不是 billion（1e9 差 10 倍）**
-- 中文「兆」 → `trillion` (1e12)
-- 英文 thousand/million/billion/trillion → 同名 scale
-
-`number_extract.py` 的 Haiku echo prompt 強制：中文「億」/「亿」echo 為 `hundred_million`、不要翻譯成 `billion`。違反這條會產生 10× inflation bug（佰維 8.67 億 → 86.7 億、國泰 140 億 → 1,400 億 等實際案例）。
-
-**Currency 字典**（`CURRENCY_ZH`）：USD/TWD/NTD/HKD/CNY/RMB/JPY/EUR/GBP/KRW/SGD → 中文名。
-
-**確定性轉換規則**（`to_chinese_amount`）：value × scale_multiplier → base units → 自動依量級選 萬 / 億 / 兆 單位，附中文貨幣名。例：`(9.4, "billion", "USD")` → `"94 億美元"`。
-
-**失敗模式**：Haiku 回傳 JSON 解析失敗 → 印警告、回傳空 dict、graceful degrade（synthesizer 沒拿到 `numbers_zh` block，照舊跑）。
-
-**Audit 追蹤**：每筆 echo 連同 derived Chinese 都寫入 `.log` 的 `--- Extracted Numbers ---` 區塊，方便對照 raw → zh 是否正確。
-
-**成本**：每次 agent run 多一次 Haiku 呼叫（evidence cap 50k 字元），約 $0.01-0.02 等級。
-
-**Self-test**：`python3.13 utils/unit_convert.py` 跑 24 個 case（含 #8 的 GameStop 9 vs 9.4 billion 與 #16 的中文「億」/「兆」/「萬」回歸）；所有 case 過才能 ship。新增 scale / currency 時加 case。
-
-**目前接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若會引用 evidence 數字，照樣插入 `evaluate(done) → extract_numbers → verify → generate_report` 並在 prompt 加 rule 9。
-
-### Premise / Coverage Validation Layer（`utils/premise_validate.py`）
-
-**為什麼存在**：issue #19 / #7 / #4 同源 — `evaluate` node 只判「搜得夠不夠」，不判「能不能答 CY 真正問的事」。失敗模式：
-- #7 環旭越南廠：找到對的一手 PDF，但報告用「戰略佈局」「重要環節」填空，沒抓進具體產能 / 廠址 / 投資金額
-- #19 國泰金 Mayapada「政大校長介紹」：所有 evidence 沒提此事，synthesizer 卻**迂迴**用「某董事畢業於政大」這類沾邊事實撐起這條 premise，掩蓋 unverified 狀態
-
-根因：synthesizer 訓練分布的 helpfulness 慣性蓋過「資料不足明寫」prompt rule。需要更**結構化**的契約強制。
-
-**插入點**：`evaluate(done) → extract_numbers → verify → generate_report`。`verify` 跑在 `extract_numbers` 之後、`generate_report` 之前。
-
-**verify_node 行為**：Haiku 把 instruction 拆成兩個結構化清單：
-- `premises[]` — 任務指令中的**斷言**（「市值比鴻海高」「投資 4 億美金」「政大校長介紹」）
-- `deliverables[]` — 任務指令要答的**問題 / 資料點**（「越南廠址」「年產能」「漲幅多少」）
-
-對每條根據 evidence 標 status：
-| Type | Statuses |
+| 路徑 | 用途 |
 |---|---|
-| Premise | `confirmed` / `partial` / `unverified` |
-| Deliverable | `answered` / `partial` / `missing` |
+| `scripts/build_docx_cli.py` | JSON spec → `.docx`（內部用 WordBuilder）。`python3.13 scripts/build_docx_cli.py --spec /tmp/spec.json` |
+| `scripts/build_pptx_cli.py` | JSON spec → `.pptx`（含 DALL-E 圖片可選）。Self-contained，沒依賴 deprecated agent file |
+| `formatters/word_formatter.py` | WordBuilder — 統一 Word 格式（A4、微軟正黑體 14pt、Private & Confidential 頁眉、頁碼、Table Grid 表格） |
+| `utils/file_naming.py` | `general(task_name, intern_name, task_date, ext='docx')` → `YYYY.MM.DD_TaskName_Intern.docx` |
+| `utils/unit_convert.py` | 中文金額確定性轉換（億 / 兆 / 萬）。Self-test：`python3.13 utils/unit_convert.py`（28 cases，需全過） |
+| `utils/financial_tools.py` | yfinance + FinanceDatabase fetchers。`fetch_all(ticker, tools=[...])` 是主要進入點。**Skill 自己解 ticker 後傳入**；本模組不再用 Haiku normalizer |
+| `utils/stt.py` | OpenAI gpt-4o-transcribe（中文同音字辨識優於 whisper-1） |
+| `assets/ppt_chrome_template.pptx` | PPT chrome（深藍漸層、底線、logo、頁碼 placeholder）。`build_pptx_cli.py` 自動 inherit |
 
-**結構化拆解規則**（prompt 內強制）：任務若提到產能 / 規模 / 金額 / 員工數 / 廠址 / 時程 / 產品線 / 排名，**每一項拆成獨立 deliverable**，不可合併成「基本資料」這種模糊類別 — 這條防 #7 的核心失誤。
+## 智能複查（migration 的核心勝利點）
 
-**禁止 sound-adjacent fill**：prompt 明寫「instruction 說『政大校長介紹』，evidence 只提到『某董事畢業於政大』— 這條 premise 必須 `unverified`，不可 `partial` 或 `confirmed`」。
+舊架構在 `extract_numbers` → `verify` → `generate_report` 跑 3 個獨立 Haiku call、互相不知道對方產出，而且 synthesizer Opus/Sonnet 經常返回壞 JSON 導致整個任務失敗。新架構把所有 LLM-driven step 都讓 Claude 在 skill 流程內執行，每個研究類 skill 都有「自我複查 checklist」一步：
 
-**注入點**：`generate_report` context 最後一段（在 evidence / financial_data / sector_data / numbers_zh 之後），透過 `format_for_prompt(validation)` 渲染 `[前提驗證 / 覆蓋度檢查]` 區塊。
+1. 高風險數字（融資 / 估值 / 市值 / 員工數 / HQ）逐條 Tavily 再驗證
+2. 中文「億」/「兆」對英文 scale 沒翻錯（億 ≠ billion，差 10 倍）
+3. 任務指令的每個 premise / deliverable，evidence 真覆蓋還是沾邊撐？
+4. 沒空洞修辭、沒免責聲明、沒提及任務指令
 
-**Synthesizer prompt rule 10**（兩個 agent 同步加）強制：
-- `[unverified]` premise → 必須明寫「任務指令所述『X』，本次搜尋資料無法驗證」；**禁止用沾邊 evidence 撐起**
-- `[partial]` premise → 明寫確認的部分、明標未確認的部分
-- `[missing]` deliverable → 必須明寫「資料不足，無法回答 X」；**禁止用「戰略佈局」「重要環節」「持續發展」等抽象詞替代**
-- `[partial]` deliverable → 寫出找到的部分，明標未抓到的具體數值 / 名稱 / 日期
+這步在過去等於「寫 prompt 教 Sonnet 自我反省」，效果不穩；現在由 Claude 在 skill 流程中**真的**重跑搜尋，跟剛剛使用者要求對 Taichung / TAIROA 報告做 fact-check 的工作流程一模一樣。
 
-**Audit trail**：完整 validation（含每條 status / note / evidence_url）寫入 `.log` 的 `--- Premise Validation ---` 區塊（`AgentLogger.add_validation`），給校稿時對照「instruction 哪些前提沒驗到 / 哪些問題沒答到」用。
+## CLI 入口已廢棄
 
-**Cost**：每 agent run 多 1 個 Haiku（拆解 + status 判定），evidence cap 50k chars，~$0.01-0.02。
+舊：
+- `main.py --audio ... --intern Justin`
+- `translate.py "Title" Source date Justin`
+- `python3.13 agents/company_info_agent.py --task ...`
 
-**接入**：`company_info_agent` 與 `person_info_agent`。新增 research agent 若有結構化前提 / 問題清單，照樣插入 `extract_numbers → verify → generate_report`，並在 generate_report prompt 加 rule 10。
+**新（在 Claude Code session 內）**：
+- 自然語言：「查 Tesla」「翻這篇」「整理會議紀錄」
+- 顯式：`/fcc-company-info`、`/fcc-translation`、`/fcc-dictation` 等
 
-### 時間錨點 helper（`config.time_context()`）
-所有觸及「最新」「最近一季」「去年」「年初至今」等相對時間的 LLM prompt 都要在開頭注入 `config.time_context()`。注入點：
-- `utils/planner.py` parse_tasks
-- `agents/company_info_agent.py` parse_task / generate_report
-- `agents/person_info_agent.py` parse_task / generate_report
-- `utils/react_loop.py` next_action / evaluate
-- `agents/podcast_agent.py` generate_queries
+舊 CLI 全部刪除。要批次跑類似 `run_tasks.sh` 那種多任務，在 Claude Code 內把任務清單貼上去即可。
 
-新增有時間敏感性的 prompt 時務必加注入。
+## 寫作禁忌（在 `fcc-shared` 內，所有 skill 引用）
 
-### Word 輸出不含 references
-`company_info` / `person_info` 的 Word 文件**不含**內文引用標記（`[N]`）和「參考來源」section。來源資訊只存於 `.log` sidecar，不出現在文件裡。`WordBuilder.add_references()` 方法仍存在於 formatter，但這兩個 agent 不呼叫它。
+### 絕對禁止
+- **免責聲明**（僅供參考 / 請以官方為準 / 資料可能有誤）
+- **空洞修辭**（成長雙位數 / 戰略佈局 / 行業領先 / 持續優化 / 重要環節 / 賦能 / 深耕 / 打造完整生態）
+- **沾邊事實撐 premise**（指令說「政大校長介紹」、evidence 只有「某董事畢業於政大」→ 不能寫成「partial confirmed」）
+- **括號標原文**（中文名後不加英文 / 越南文括號，除非 ticker 縮寫第一次出現）
+- **提及任務指令**（「您指示」「本任務」等）
 
-### podcast 的 planner 特殊規則
-`podcast` 屬 `_MANUAL_ONLY_TYPES`，Haiku 不自動分類。必須 `--type podcast`。`parse_tasks()` early return：raw 原文原封不動傳給 agent，不被 Haiku 改寫。topic/questions 解析在 agent 內的 `parse_instruction` node（Haiku）執行。router 直接傳 `task_instruction=raw`，不再解析 JSON。
+### 必須遵守
+- 找不到資料明寫「資料不足」
+- yfinance 數字附 `as_of` / `period_end` 日期
+- 引用同公司多 ticker 時明指哪家（「GME 市值 ...」而非「市值 ...」）
 
-### podcast 的 domain 過濾與白名單
-**兩層過濾**：
-1. `_BLOCKED_DOMAINS`：完全封 — 社群 / 影音 / 低品質站。包含 Facebook、Twitter/X、Instagram、TikTok、Reddit、Weibo、微信、Threads 以及 **YouTube、LinkedIn**（podcast 任務只要文字稿，影音 / 社交不夠正式）
-2. `_NEWS_WHITELIST`：~38 站新聞白名單，分四層 — 台灣主流（cna / ctee / udn / ltn / chinatimes / ettoday / bnext / 商周 / 財訊 / 天下 等）/ 台灣產業專業（digitimes / ithome / techorange / inside / 36kr）/ 國際中文（BBC / 紐時中文 / RFA / VOA / DW / 財新 / 21 經濟 等）/ 國際英文（reuters / bloomberg / ft / nytimes / wsj / nikkei / techcrunch / scmp 等）
+## 中文數字單位（關鍵 trap）
 
-**過濾流程**：
-- url 在 `_BLOCKED_DOMAINS` → skip
-- 字數 < `_MIN_ARTICLE_CHARS=50` → skip（只擋明顯 snippet stub）
-- url 在 `_NEWS_WHITELIST` → 接收 + 標 verified
-- url 不在白名單也不在 blocked → 接收但 `.log` 標 `[unverified_source]`（給校稿用）
+`$9.4 billion` = **94 億美元**（不是 9.4 億）。中文「億」對應 `hundred_million` (1e8)，不對應英文 `billion` (1e9)，差 10 倍。
 
-新增白名單站時，加進對應分類即可，不需改邏輯。
+完整對應表：
+| 中文 | 英文 scale | 數值 |
+|---|---|---|
+| 萬 | ten_thousand | 1e4 |
+| 億 | hundred_million | 1e8 |
+| 兆 | trillion | 1e12 |
 
-### confirm() 的範圍限制
-`planner.confirm()` 展示的是 Haiku 解析出的 `task.instruction`，讓使用者在執行前確認或修改。**Tavily 搜尋 queries 是在 confirm 之後、agent Node 1 內部才生成**，使用者看不到。若 query 生成跑偏（如研究對象被誤解為產業生態），只能在 confirm 階段透過修改 instruction 間接影響。
+`utils/unit_convert.py` 提供確定性轉換 + 28 個 self-test case（包含 GameStop 9.4 billion 與中文「億」/「兆」/「萬」雙向回歸）。新增 scale / currency 時加 case。
 
-### confirm() 的 merge 指令
-使用者輸入 `m a,b[,c]`（如 `m 1,3` 或 `m 1,3,5`），planner 把指定編號的多個 PlanTask 透過 Haiku 合併成一條，agent_type 採多數決（平手保留第一個任務的 type 維持順序意圖）。合併結果插回最低 index 位置，其餘 pop 掉。用於救「同主題被 Haiku 誤拆」的情境（補強 planner 內建合併規則的盲點）。
+## 時間錨點
 
-### verbal_cleanup 必須手動指定
-`verbal_cleanup` 在 `_MANUAL_ONLY_TYPES`，Haiku 不會自動分類到這個 type。必須用 `--type verbal_cleanup` 明確指定，否則會被分類成其他 agent。
+研究時務必確認「最新」「最近一季」「去年」「年初至今」這類相對時間參考點。今天的絕對日期可從 Claude Code environment context 拿到，用此計算 t / t-1 / t-2 (年)、最近一季。
 
-此外，`parse_tasks()` 對 `_MANUAL_ONLY_TYPES` 的 `force_type` 做 early return：不呼叫 Haiku，直接把原始 `raw_instruction` 原封不動包成一個 `PlanTask`（label 取前 30 字 + `...`）。這保證 verbal_cleanup agent 收到的是完整 STT 原文，不會被 planner Haiku 改寫成摘要。未來若加其他「原文照搬」型 agent，加進 `_MANUAL_ONLY_TYPES` 即自動獲得此行為。
+舊架構在 `config.time_context()` 注入到每個 prompt；新架構由 Claude 自己讀 environment 的 `currentDate` 處理。
 
-### OCR（`utils/ocr.py`）
-`extract_text(path)` — 圖片或 PDF → 純文字，供 translation agent 使用：
-- 圖片（.jpg/.jpeg/.png/.gif/.webp）：base64 → Claude Haiku Vision
-- PDF：PyMuPDF 逐頁轉 PNG → 逐頁 OCR 合併
-- 自動壓縮超過 3.6MB 的圖片（base64 後不超過 Claude 的 5MB 上限）
-- OCR prompt 設計為「純輸出文字，不評論」，避免模型拒絕有版權內容
+## 輸出 / Subdir 規範
 
-### Cost Tracking
-`utils/cost_tracker.py` singleton `tracker`：
-- agent 內呼叫 `tracker.record_claude()` / `tracker.record_tavily()` / `tracker.record_dalle()` 記錄
-- `record_claude()` 必須傳入實際使用的 model（`LLM_FAST` 或 `LLM_MAIN`），不能混用；遇到不在 `_CLAUDE_PRICES` 的 model 會印一次 `[cost] ⚠ unknown model ...` 警告再用 `_default` 估價（不會 silent fallback）
-- `main.py` 每個任務完成後呼叫 `tracker.print_task_summary()`（印當前任務費用，包含 Claude / Whisper / DALL-E / Tavily）
-- `translate.py` 直接執行時同樣呼叫 `print_task_summary()`
-- Session 結束呼叫 `tracker.print_summary()`（印總計）
+| Skill | subdir | 範例檔名 |
+|---|---|---|
+| company_info, person_info, dictation, verbal_cleanup | `output/adhoc/` | `2026.05.27_Tesla 調查_Justin.docx` |
+| translation | `output/daily/` | `2026.05.27_Title_WSJ_Justin.docx` |
+| podcast, speech_ppt | `output/weekly/` | `2026.05.27_K-pop_Justin.docx` / `.pptx` |
 
-### Financial Data Layer（`utils/financial_tools.py`）
-`company_info_agent` 在 `parse_task` 之後執行 Haiku Q1/Q2/Q3 三問分類，Q2 與 Q3 獨立觸發不同 node：
-
-| 問題 | 判斷內容 | 觸發 node | 資料來源 |
-|---|---|---|---|
-| Q1 + Q2 | 任務「明確需要」該公司的市場交易資料（股價/估值/財報數字） | `fetch_financial_data` | yfinance |
-| Q3 | 需要產業 / 地區公司清單 | `fetch_sector_data` | FinanceDatabase |
-
-**Q1 收緊條件（wave 2）**：明列 Y 觸發詞（股價 / 市值 / PE / EV/EBITDA / 股息 / 最新財報數字 / 機構持股 / Yahoo 新聞）、N 條件（純業務面研究即使帶 ticker 也 N）、保守原則（不確定 → N）。意圖：避免每個帶公司名的任務都觸發財務層。
-
-**Multi-ticker 結構（issue #13）**：`check_financial_need` 輸出 `tickers: list[str]`（最多 3 個，主角優先）+ `company_name: str`（fallback）兩個互斥欄位，取代舊的單一 `company_name`：
-- Haiku 能直接判定 ticker → 填 `tickers`（純字串，dedup + uppercase + cap 3），`company_name=""`
-- Haiku 不確定 → `tickers=[]`，`company_name` 填乾淨單一公司名走 `resolve_ticker`
-- `fetch_financial_data` 先驗證 direct tickers 通過 `_is_valid_ticker_format`；通過的直接 `fetch_all` 抓資料、bypass Haiku #2；都沒過才走 company_name fallback path
-- 適用情境：M&A 雙方都列、Apple/Tesla 等熟公司省一次 Haiku 呼叫、`GameStop (GME)` 這類括號干擾下游的 case 也直接收掉
-
-**Q2 工具**（`YFINANCE_TOOL_DESCRIPTIONS` / `TOOL_REGISTRY`）：
-- `stock_price` — 近 3 個月股價走勢、現價、52 週高低
-- `financials`  — 最新季度財報（損益 / 資產負債 / 現金流量）
-- `key_metrics` — 估值指標（市值、PE、EV/EBITDA、股息率、Beta）
-- `holders`     — 前 10 大機構股東
-- `news`        — Yahoo Finance 最新 5 則新聞
-
-**Q3 工具**（`SECTOR_TOOL_DESCRIPTIONS` / `SECTOR_TOOL_REGISTRY`）：
-- `sector_scan` — FinanceDatabase 依 sector + country 列出上市公司清單（預設最多 30 筆）
-
-`fetch_financial_data` 走 conditional edge（Q2=[] 時由 `check_financial_need` 直接跳到 `fetch_sector_data`，不浪費 ticker 解析呼叫）。`fetch_sector_data` 是 no-op when Q3.needed≠Y。呼叫之間有 `_CALL_DELAY`（預設 1.5s）rate limiting；失敗回傳 `{"error": "..."}` 並印警告，不中斷流程。
-
-新增工具：yfinance 工具加入 `TOOL_REGISTRY` + `YFINANCE_TOOL_DESCRIPTIONS`；新資料庫工具加入各自的 `*_TOOL_REGISTRY` + `*_TOOL_DESCRIPTIONS`，並在 prompt 新增對應 Qn。
-
-**`financial_data` state 結構（multi-ticker）**：
-```python
-{
-    "GME":  {"stock_price": {...}, "financials": {...}, ...},    # tool_id keys
-    "EBAY": {"stock_price": {...}, ...},
-    "_resolve_failed": ["..."],                                  # optional
-}
-# or, when no ticker resolves at all:
-{"_ticker_error": "...", "_resolve_failed": [...]}
-```
-Top-level keys 是 ticker（uppercase），meta keys 以 `_` 開頭。`generate_report` 對每個非 `_` 開頭的 key 注入一個 `[結構化財務資料 — TICKER（來自 yfinance）]` block；`logger` 每個 ticker render 一個 `--- Financial Data (TICKER | yfinance: ...) ---` 區塊。
-
-**synth prompt rule 6 為 multi-ticker 強化**：引用 yfinance 數字時必須指明是哪一家公司（例：「GME 市值 103.9 億美元」），避免混淆來源。
-
-Financial / sector data 以結構化 JSON 注入 `generate_report` context；財務數字優先採用 yfinance，Tavily 數字僅作背景參考。所有 fetched data 同時寫入 `.log` sidecar。
-
-**Ticker 解析（`resolve_ticker(strict=True)` 為新預設）**：
-
-`strict=True`（預設，給 `fetch_financial_data` 用），三段順序：
-1. **Inline ticker prefilter**（issue #17）— 用 `_TICKER_INLINE_RE` 在 `company_name + task_context` 字面找明確 ticker pattern（如 `601138.SH`、`2317.TW`），找到就直接 return，bypass Haiku。專治 instruction 字面已給 ticker 但 Haiku #2 hallucinate 成別家公司的 case
-2. **Haiku normalizer**（`_haiku_normalize_ticker(strict=True)`）— Haiku 必須 `confidence=high` 且 ticker 通過 `_VALID_TICKER_RE`（US ≤5 字母 / `.TW/.TWO/.HK/.SZ/.SS/.SH/.T/.KS/.L/.TO/.AX/.PA/.DE` 等市場後綴）；medium 直接擋掉
-3. **Cross-check**：若 inline prefilter 找到的 ticker 跟 Haiku 給的不同，採用 inline 的（防 Haiku 寧可亂猜也不 return null）
-
-不走 yf.Search / FinanceDatabase fuzzy fallback — 寧可跳過財務層，也不餵 yfinance 非法 symbol（如 `industry='semiconductor company'`）。
-
-**`.SH` → `.SS` canonicalization**：上交所 ticker 在 Wind / 同花順 / 新浪財經 / CY 口述用 `.SH`，但 yfinance 只認 `.SS`（用 `.SH` 會 404）。`_canonicalize_ticker()` 在 `resolve_ticker` / `fetch_all` / agent 的 direct ticker 收集處統一轉換。`_VALID_TICKER_RE` 接受兩種輸入。
-
-`strict=False`（legacy 路徑，可給未來 discovery / sector 用）：
-- 三段 fallback：Haiku（high+medium）→ yf.Search → FinanceDatabase
-
-**`as_of` / `period_end` 欄位（wave 1）**：
-- `fetch_stock_price` payload 含 `as_of` = last bar 日期（YYYY-MM-DD，不是 fetch 時間）
-- `fetch_financials` 含 `period_end` dict（`income_stmt_latest_q` / `balance_sheet_latest_q` / `cashflow_latest_q` 各自的期末日）
-- 其餘 fetcher 含 `as_of` = Asia/Taipei fetch 時間
-- `generate_report` prompt 強制：引用 yfinance 數字必附資料日期
-
-**FDB enum cache（`get_fdb_enum()`）**：一次性載入 FinanceDatabase 的 sector / industry_group / industry / country / exchange enum，cache 到 `utils/_fdb_enum.json`（committed for fresh-checkout convenience）。需要 refresh 時刪掉 JSON 即可。目前 `sector_scan` agent 移除後無 caller，保留供未來結構化掃描功能重用。
-
-**Data source self-declaring**：每個 fetcher 透過 `_tag_source()` 在成功 payload 加 `"_source": "yfinance"` 或 `"FinanceDatabase"`。`utils/logger.py` 讀每筆 payload 的 `_source`，動態產生 log label（例：`--- Financial Data (yfinance: stock_price, key_metrics) ---`），不再 hardcode。新增跨資料源 fetcher 時務必呼叫 `_tag_source()`。
-
-## 尚未建置
-- `delivery/email_draft.py` — email 草稿生成
-
-## 已知問題與改進清單
-
-下列為程式碼靜態審閱後仍未修的項目。M1-M5 / L1-L5 已於 2026-04-23 修復。
-
+`build_docx_cli.py` / `build_pptx_cli.py` 自動把同檔複製到 `~/Downloads/`，除非 `FCC_DISABLE_DOWNLOADS_COPY=1`。
 
 ## Reference Files（範本）
 路徑：`/Users/junjie/Library/CloudStorage/OneDrive-個人(2)/Internship/Works/`
 - company_info：`2026.03.26_Nutrition Startup Huel_Justin.docx`
 - person_info：`2026.04.02_林振宏_Justin.docx`
 - podcast：`2026.03.25_K-pop_Podcast.docx`
+- speech_ppt：`2026.04.09_台中智慧製造演講.pptx`（也是 `assets/ppt_chrome_template.pptx` 的來源）
