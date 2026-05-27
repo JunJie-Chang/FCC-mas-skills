@@ -3,7 +3,7 @@
 # install.sh — FCC-mas skill set installer (Mac / Linux / WSL2)
 #
 # One-liner install:
-#   curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas-skills/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas/main/install.sh | bash
 #
 # What this does:
 #   1. Checks for required tools (git, python3 ≥ 3.10, ffmpeg, claude)
@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-REPO_URL="https://github.com/JunJie-Chang/FCC-mas-skills.git"
+REPO_URL="https://github.com/JunJie-Chang/FCC-mas.git"
 INSTALL_DIR="$HOME/.fcc-mas"
 SKILLS_DST="$HOME/.claude/skills"
 
@@ -259,7 +259,7 @@ ${BOLD}下一步${NC}：
 
 ${BOLD}更新${NC}：未來重跑這個 installer 即可（git pull + 重新 pip install）：
 
-  curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas-skills/main/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/JunJie-Chang/FCC-mas/main/install.sh | bash
 
-${BOLD}問題回報${NC}：找 Justin 或開 issue 在 https://github.com/JunJie-Chang/FCC-mas-skills/issues
+${BOLD}問題回報${NC}：找 Justin 或開 issue 在 https://github.com/JunJie-Chang/FCC-mas/issues
 EOF
