@@ -30,8 +30,10 @@ def _format_date(d: Union[str, _date_type]) -> str:
 
 
 def _intern_str(intern_name: Union[str, list[str]]) -> str:
+    # Multi-intern names join with ", " to match the documented filename
+    # shape in fcc-shared (e.g. "..._Justin, Neil.docx").
     names = intern_name if isinstance(intern_name, list) else [intern_name]
-    return ",".join(_sanitize(n) for n in names)
+    return ", ".join(_sanitize(n) for n in names)
 
 
 def general(

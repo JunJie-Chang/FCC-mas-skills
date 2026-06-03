@@ -11,6 +11,12 @@ __pycache__/
 # Output files
 output/
 
+# Generated deliverables may contain client PII — never commit them.
+# (assets/ holds the committed PPT chrome template, so keep that.)
+*.docx
+*.pptx
+!assets/**
+
 # Installer log
 /tmp/fcc-mas-pip.log
 

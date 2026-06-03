@@ -6,9 +6,9 @@ instead of raising, so callers can always continue gracefully.
 
 Callable from `fcc-company-info` skill via Bash:
 
-    python3.13 -c "
-    import json, sys
-    sys.path.insert(0, '/Users/junjie/Desktop/Internship/FCC/FCC-mas')
+    python3 -c "
+    import json, os, sys
+    sys.path.insert(0, os.environ.get('FCC_MAS_HOME', os.path.expanduser('~/.fcc-mas')))
     from utils.financial_tools import fetch_all
     print(json.dumps(fetch_all('TSLA',
         tools=['stock_price','financials','key_metrics','holders','news']),
@@ -23,6 +23,7 @@ inputs are auto-canonicalized to .SS.
 Rate limiting: _CALL_DELAY seconds are inserted between successive API calls.
 """
 import re
+import sys
 import time
 import warnings
 from datetime import datetime, timezone
@@ -191,7 +192,7 @@ def fetch_stock_price(symbol: str) -> dict:
         }
     result = _safe(_fetch)
     if "error" in result:
-        print(f"[financial_tools] ⚠ stock_price({symbol}): {result['error']}")
+        print(f"[financial_tools] ⚠ stock_price({symbol}): {result['error']}", file=sys.stderr)
     return _tag_source("stock_price", result, "yfinance")
 
 
@@ -222,7 +223,7 @@ def fetch_financials(symbol: str) -> dict:
         return out
     result = _safe(_fetch)
     if "error" in result:
-        print(f"[financial_tools] ⚠ financials({symbol}): {result['error']}")
+        print(f"[financial_tools] ⚠ financials({symbol}): {result['error']}", file=sys.stderr)
     return _tag_source("financials", result, "yfinance")
 
 
@@ -242,7 +243,7 @@ def fetch_key_metrics(symbol: str) -> dict:
         return out
     result = _safe(_fetch)
     if "error" in result:
-        print(f"[financial_tools] ⚠ key_metrics({symbol}): {result['error']}")
+        print(f"[financial_tools] ⚠ key_metrics({symbol}): {result['error']}", file=sys.stderr)
     return _tag_source("key_metrics", result, "yfinance")
 
 
@@ -274,7 +275,7 @@ def fetch_holders(symbol: str) -> dict:
         }
     result = _safe(_fetch)
     if "error" in result:
-        print(f"[financial_tools] ⚠ holders({symbol}): {result['error']}")
+        print(f"[financial_tools] ⚠ holders({symbol}): {result['error']}", file=sys.stderr)
     return _tag_source("holders", result, "yfinance")
 
 
@@ -297,7 +298,7 @@ def fetch_news(symbol: str) -> dict:
         )
     result = _safe(_fetch)
     if "error" in result:
-        print(f"[financial_tools] ⚠ news({symbol}): {result['error']}")
+        print(f"[financial_tools] ⚠ news({symbol}): {result['error']}", file=sys.stderr)
     return _tag_source("news", result, "yfinance")
 
 
@@ -337,7 +338,7 @@ def fetch_sector_scan(sector: str, country: str = None, limit: int = 30) -> dict
 
     result = _safe(_fetch)
     if "error" in result:
-        print(f"[financial_tools] ⚠ sector_scan('{sector}', '{country}'): {result['error']}")
+        print(f"[financial_tools] ⚠ sector_scan('{sector}', '{country}'): {result['error']}", file=sys.stderr)
     return _tag_source("sector_scan", result, "FinanceDatabase")
 
 
@@ -366,7 +367,7 @@ def fetch_sector_data(q3: dict) -> dict:
     """
     sector  = q3.get("sector", "")
     country = q3.get("country") or None
-    print(f"[financial_tools] sector_scan: sector='{sector}' country='{country}'…")
+    print(f"[financial_tools] sector_scan: sector='{sector}' country='{country}'…", file=sys.stderr)
     time.sleep(_CALL_DELAY)
     return fetch_sector_scan(sector, country)
 
@@ -383,17 +384,17 @@ def fetch_all(symbol: str, tools: list[str]) -> dict:
     """
     canon = _canonicalize_ticker(symbol)
     if canon != symbol:
-        print(f"[financial_tools] canonicalize {symbol} → {canon}")
+        print(f"[financial_tools] canonicalize {symbol} → {canon}", file=sys.stderr)
     results: dict = {"ticker": canon}
     valid = [t for t in tools if t in TOOL_REGISTRY]
     unknown = [t for t in tools if t not in TOOL_REGISTRY]
     if unknown:
-        print(f"[financial_tools] ⚠ unknown tools skipped: {unknown}")
+        print(f"[financial_tools] ⚠ unknown tools skipped: {unknown}", file=sys.stderr)
 
     for i, tool_id in enumerate(valid):
         if i > 0:
             time.sleep(_CALL_DELAY)
-        print(f"[financial_tools] fetching {tool_id} for {canon}…")
+        print(f"[financial_tools] fetching {tool_id} for {canon}…", file=sys.stderr)
         results[tool_id] = TOOL_REGISTRY[tool_id](canon)
 
     return results
