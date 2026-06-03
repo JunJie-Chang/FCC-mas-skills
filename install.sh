@@ -158,7 +158,10 @@ done
 header "5. Configuring OpenAI API key"
 
 ENV_FILE="$INSTALL_DIR/.env"
-if [[ -f "$ENV_FILE" ]] && grep -q "^OPENAI_API_KEY=sk-" "$ENV_FILE" 2>/dev/null; then
+# Match a real key (sk- followed by ≥10 key chars), NOT the .env.example
+# placeholder "sk-..." — otherwise a skipped install leaves a placeholder
+# that this check mistakes for a configured key and never re-prompts.
+if [[ -f "$ENV_FILE" ]] && grep -qE "^OPENAI_API_KEY=sk-[A-Za-z0-9_-]{10,}" "$ENV_FILE" 2>/dev/null; then
   ok ".env already configured (existing OPENAI_API_KEY kept)"
 else
   echo "Need an OpenAI key for:"
@@ -178,6 +181,7 @@ else
     ok ".env written ($(wc -c < "$ENV_FILE") bytes, mode 600)"
   else
     cp "$INSTALL_DIR/.env.example" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
     warn "Skipped — .env copied from .env.example. STT/DALL-E will fail until you set OPENAI_API_KEY."
   fi
 fi

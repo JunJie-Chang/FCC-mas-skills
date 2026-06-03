@@ -139,7 +139,11 @@ def transcribe(audio_path: str | Path) -> str:
         if _looks_degenerate(transcript):
             print("[stt] ⚠ 轉錄結果疑似退化迴圈，請確認音檔品質")
 
-    from utils.cost_tracker import tracker
-    tracker.record_stt(duration)
+    try:
+        from utils.cost_tracker import tracker
+        tracker.record_stt(duration)
+    except Exception as exc:  # cost logging must never break transcription
+        import sys
+        print(f"[stt] ⚠ 用量紀錄略過：{exc}", file=sys.stderr)
 
     return _to_traditional(transcript)
