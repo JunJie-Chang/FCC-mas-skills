@@ -1,0 +1,18 @@
+{
+  "title": "Smoke Test Report",
+  "task_name": "Smoke Test",
+  "task_date": "2026-06-03",
+  "intern_name": "Justin",
+  "subdir": "adhoc",
+  "sections": [
+    { "type": "heading", "text": "Section One" },
+    { "type": "paragraph", "text": "A paragraph of body text." },
+    { "type": "bullet", "text": "A bullet point." },
+    { "type": "keyed_info", "key": "Key", "text": "value" },
+    { "type": "table", "headers": ["A", "B"], "rows": [["1", "2"], ["3", "4"]] },
+    { "type": "blank" },
+    { "type": "references", "references": [
+      { "num": 1, "title": "Example Source", "url": "https://example.com" }
+    ] }
+  ]
+}

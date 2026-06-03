@@ -1,3 +1,9 @@
+[tool.pytest.ini_options]
+# Let tests import top-level packages (utils, config, formatters) by adding
+# the repo root to sys.path.
+pythonpath = ["."]
+testpaths = ["tests"]
+
 [tool.ruff]
 # Helpers target the installer's supported interpreters (3.10–3.13).
 target-version = "py310"

@@ -3,7 +3,7 @@ utils/file_naming.py — Unified filename generation.
 
 Observed naming convention from Works/:
   General:  YYYY.MM.DD_TaskName_InternName.docx
-  Multiple: YYYY.MM.DD_TaskName_Justin,Neil,Ethan.docx
+  Multiple: YYYY.MM.DD_TaskName_Justin, Neil, Ethan.docx
   Version:  YYYY.MM.DD_TaskName_v2_InternName.docx  (omitted when version=1)
 
   Speech:   {speech_date}演講_{edit_date}_{title}_v{n}_InternName.docx
