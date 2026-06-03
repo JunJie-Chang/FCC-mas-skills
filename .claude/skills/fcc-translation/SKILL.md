@@ -123,7 +123,6 @@ python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.j
 
 - **圖片**：直接用 Read tool 讀，Claude 多模態原生看圖 → 抽文字 → 翻譯
 - **PDF**：用 Read tool 讀（內建支援 PDF），或 `pdftotext` 預處理後再翻
-- 若使用者明確要 OCR helper，呼叫 `python3.13 -c "from utils.ocr import extract_text; print(extract_text('<path>'))"`（但 Claude 直接 Read 通常更準）
 
 ---
 

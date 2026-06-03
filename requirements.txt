@@ -6,8 +6,8 @@ python-docx==1.2.0
 python-pptx==1.0.2
 
 # Financial data
-yfinance>=0.2.54
-financedatabase>=2.2.0
+yfinance==1.4.0
+financedatabase==2.3.1
 
 # OpenAI — STT (gpt-4o-transcribe) + DALL-E 3
 openai==2.30.0
@@ -16,7 +16,7 @@ openai==2.30.0
 python-dotenv==1.2.2
 
 # Web content extraction (podcast skill uses for full-text fetch)
-trafilatura>=1.12.0
+trafilatura==2.0.0
 
 # Simplified ↔ Traditional Chinese conversion (podcast / translation skills)
-opencc>=1.1.6
+opencc==1.3.1
