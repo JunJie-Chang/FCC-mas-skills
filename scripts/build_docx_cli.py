@@ -54,9 +54,8 @@ _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
 from formatters.word_formatter import WordBuilder  # noqa: E402
-from utils.file_naming import general as _fname    # noqa: E402
-from utils.spec_io import load_spec, safe_subdir, safe_filename  # noqa: E402
-
+from utils.file_naming import general as _fname  # noqa: E402
+from utils.spec_io import load_spec, safe_filename, safe_subdir  # noqa: E402
 
 _DISPATCH = {
     "heading":             lambda wb, b: wb.add_heading(b["text"]),

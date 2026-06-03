@@ -374,9 +374,9 @@ class WordBuilder:
         if self._comments_part_ref is not None:
             return self._comments_part_ref
 
-        from lxml import etree
-        from docx.opc.part import Part
         from docx.opc.packuri import PackURI
+        from docx.opc.part import Part
+        from lxml import etree
 
         doc_part = self._doc.part
         for rel in doc_part.rels.values():
@@ -400,8 +400,9 @@ class WordBuilder:
 
     def _attach_comment(self, para, comment_text: str) -> None:
         """Attach a Word comment bubble to an existing paragraph."""
-        from lxml import etree
         from datetime import datetime, timezone
+
+        from lxml import etree
 
         cid = self._comment_counter
         self._comment_counter += 1

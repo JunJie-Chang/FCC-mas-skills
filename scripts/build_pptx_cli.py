@@ -54,8 +54,8 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
-import config                                # noqa: E402
-from utils.file_naming import general as _fname   # noqa: E402
+import config  # noqa: E402
+from utils.file_naming import general as _fname  # noqa: E402
 from utils.spec_io import load_spec, safe_subdir  # noqa: E402
 
 # Load .env so OPENAI_API_KEY is available (DALL-E). override=True keeps
@@ -184,8 +184,8 @@ def _generate_dalle_image(title: str, max_retries: int = 3) -> str | None:
 
 def build_pptx(spec: dict) -> dict:
     from pptx import Presentation
-    from pptx.util import Pt, Emu
     from pptx.dml.color import RGBColor
+    from pptx.util import Emu, Pt
 
     slides_in = spec.get("slides", [])
     structured   = [s for s in slides_in if s.get("type") == "structured"]
