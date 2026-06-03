@@ -1,0 +1,12 @@
+[tool.ruff]
+# Helpers target the installer's supported interpreters (3.10–3.13).
+target-version = "py310"
+line-length = 100
+extend-exclude = ["output", ".venv", "assets"]
+
+[tool.ruff.lint]
+# Pragmatic default: pyflakes (F) + a subset of pycodestyle (E) + isort (I).
+select = ["E", "F", "I", "W"]
+# E501 (line length) is advisory here — several format constants and
+# docstrings intentionally run long.
+ignore = ["E501"]

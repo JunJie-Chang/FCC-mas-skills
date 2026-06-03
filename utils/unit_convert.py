@@ -1,9 +1,9 @@
 """
 utils/unit_convert.py — Deterministic numeric → Chinese-string conversion.
 
-Pure Python, no LLM. Used by utils/number_extract.py to turn (value, scale, currency)
-triples into canonical Chinese strings (e.g. "$9.4 billion" → "94 億美元") so that
-the synthesizer LLM only has to echo strings, never recompute unit conversions.
+Pure Python, no LLM. Turns (value, scale, currency) triples into canonical
+Chinese strings (e.g. "$9.4 billion" → "94 億美元") so report writers echo a
+correct string instead of recomputing unit conversions by hand.
 
 Conversion rules (deterministic):
     value × scale_multiplier → base units of currency

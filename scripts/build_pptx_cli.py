@@ -44,7 +44,6 @@ import argparse
 import json
 import os
 import shutil
-import ssl
 import sys
 import tempfile
 import urllib.request
@@ -57,6 +56,7 @@ sys.path.insert(0, str(_REPO))
 
 import config                                # noqa: E402
 from utils.file_naming import general as _fname   # noqa: E402
+from utils.spec_io import load_spec, safe_subdir  # noqa: E402
 
 # Load .env so OPENAI_API_KEY is available (DALL-E). override=True keeps
 # behavior consistent with the rest of the codebase — see CLAUDE.md.
@@ -82,38 +82,19 @@ IMAGE_L, IMAGE_T, IMAGE_W, IMAGE_H = (
     int(5.45 * _IN), int(1.49 * _IN), int(4.20 * _IN), int(4.31 * _IN)
 )
 
+# The deep-blue gradient chrome template is committed under assets/ and is
+# the single source of truth — no machine-specific reference file.
 _CHROME_TEMPLATE = _REPO / "assets" / "ppt_chrome_template.pptx"
-_PPT_REFERENCE = Path(
-    "/Users/junjie/Library/CloudStorage/OneDrive-個人(2)/Internship/Works/"
-    "2026.04.09_台中智慧製造演講.pptx"
-)
 
 
 # ── Chrome template handling ─────────────────────────────────────────────────
 
 def _ensure_chrome_template() -> bool:
-    """Create chrome template from reference PPTX if missing. Returns True if ready."""
+    """Return True if the bundled chrome template asset is present."""
     if _CHROME_TEMPLATE.exists():
         return True
-    if not _PPT_REFERENCE.exists():
-        return False
-    try:
-        from pptx import Presentation
-        prs = Presentation(str(_PPT_REFERENCE))
-        r_ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-        sldIdLst = prs.slides._sldIdLst
-        for sldId in list(sldIdLst):
-            r_id = sldId.get(f"{{{r_ns}}}id")
-            if hasattr(prs.part, "_rels") and hasattr(prs.part._rels, "_rels"):
-                prs.part._rels._rels.pop(r_id, None)
-            sldIdLst.remove(sldId)
-        _CHROME_TEMPLATE.parent.mkdir(parents=True, exist_ok=True)
-        prs.save(str(_CHROME_TEMPLATE))
-        print(f"[setup] Chrome template created: {_CHROME_TEMPLATE}", file=sys.stderr)
-        return True
-    except Exception as e:
-        print(f"[WARN] Could not create chrome template: {e}", file=sys.stderr)
-        return False
+    print(f"[WARN] Missing chrome template asset: {_CHROME_TEMPLATE}", file=sys.stderr)
+    return False
 
 
 def _get_object_layout(prs):
@@ -185,9 +166,8 @@ def _generate_dalle_image(title: str, max_retries: int = 3) -> str | None:
                 n=1,
             )
             image_url = resp.data[0].url
-            ctx = ssl._create_unverified_context()
             tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            with urllib.request.urlopen(image_url, context=ctx) as r:
+            with urllib.request.urlopen(image_url, timeout=60) as r:
                 tmp.write(r.read())
             tmp.close()
             return tmp.name
@@ -260,7 +240,7 @@ def build_pptx(spec: dict) -> dict:
     # Save
     intern   = spec.get("intern_name") or "Justin"
     task_date = spec.get("task_date") or date.today().strftime("%Y-%m-%d")
-    subdir   = spec.get("subdir", "weekly")
+    subdir   = safe_subdir(spec.get("subdir"), "weekly")
     topic    = spec["speech_topic"]
 
     dot_date = task_date.replace("-", ".")
@@ -295,19 +275,13 @@ def build_pptx(spec: dict) -> dict:
     }
 
 
-def _load_spec(arg: str) -> dict:
-    if arg == "-":
-        return json.load(sys.stdin)
-    return json.loads(Path(arg).read_text(encoding="utf-8"))
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build an FCC-format .pptx from JSON spec.")
     ap.add_argument("--spec", required=True, help="Path to JSON spec, or '-' for stdin.")
     args = ap.parse_args()
 
     try:
-        spec = _load_spec(args.spec)
+        spec = load_spec(args.spec)
     except json.JSONDecodeError as e:
         print(f"ERROR: invalid JSON spec — {e}", file=sys.stderr)
         return 1

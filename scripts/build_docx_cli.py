@@ -55,6 +55,7 @@ sys.path.insert(0, str(_REPO))
 
 from formatters.word_formatter import WordBuilder  # noqa: E402
 from utils.file_naming import general as _fname    # noqa: E402
+from utils.spec_io import load_spec, safe_subdir, safe_filename  # noqa: E402
 
 
 _DISPATCH = {
@@ -75,15 +76,9 @@ _DISPATCH = {
 }
 
 
-def _load_spec(arg: str) -> dict:
-    if arg == "-":
-        return json.load(sys.stdin)
-    return json.loads(Path(arg).read_text(encoding="utf-8"))
-
-
 def _resolve_filename(spec: dict) -> str:
     if spec.get("filename"):
-        return spec["filename"]
+        return safe_filename(spec["filename"])
     task_name = spec.get("task_name") or spec["title"]
     return _fname(
         task_name=task_name,
@@ -109,7 +104,7 @@ def build(spec: dict) -> Path:
 
     return wb.save(
         filename=_resolve_filename(spec),
-        subdir=spec.get("subdir", "adhoc"),
+        subdir=safe_subdir(spec.get("subdir"), "adhoc"),
     )
 
 
@@ -119,14 +114,14 @@ def main() -> int:
     args = ap.parse_args()
 
     try:
-        spec = _load_spec(args.spec)
+        spec = load_spec(args.spec)
     except json.JSONDecodeError as e:
         print(f"ERROR: invalid JSON spec — {e}", file=sys.stderr)
         return 1
 
     try:
         path = build(spec)
-    except (KeyError, ValueError) as e:
+    except (KeyError, ValueError, IndexError, TypeError) as e:
         print(f"ERROR: bad spec — {e}", file=sys.stderr)
         return 1
 

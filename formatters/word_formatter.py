@@ -499,13 +499,13 @@ class WordBuilder:
         return self
 
     def add_keyed_info(self, key: str, text: str) -> "WordBuilder":
-        """Bold key + normal text for info block: 'Key: value'. No extra spacing."""
+        """Bold key + normal text for info block: 'Key: value'. No extra spacing
+        (tighter than add_keyed_paragraph — used for stacked metadata lines)."""
         p = self._doc.add_paragraph()
         run_key = p.add_run(f"{key}: ")
         _apply_font(run_key, size_pt=config.FONT_SIZE_PT, bold=True)
         run_text = p.add_run(text)
         _apply_font(run_text, size_pt=config.FONT_SIZE_PT, bold=False)
-        _apply_para_spacing(p)
         return self
 
     def add_table(
@@ -520,9 +520,13 @@ class WordBuilder:
         for i, h in enumerate(headers):
             run = table.rows[0].cells[i].paragraphs[0].add_run(h)
             _apply_font(run, size_pt=config.FONT_SIZE_PT, bold=True)
-        # Data rows
+        # Data rows. Clamp each row to the header width so a malformed spec
+        # (a row with more cells than headers) can't raise IndexError.
+        n_cols = len(headers)
         for ri, row_data in enumerate(rows):
             for ci, val in enumerate(row_data):
+                if ci >= n_cols:
+                    break
                 run = table.rows[ri + 1].cells[ci].paragraphs[0].add_run(str(val))
                 _apply_font(run, size_pt=config.FONT_SIZE_PT, bold=False)
         return self
@@ -556,13 +560,15 @@ class WordBuilder:
         """
         base = Path(output_dir or config.OUTPUT_DIR) / subdir
         base.mkdir(parents=True, exist_ok=True)
-        dest = base / filename
+        # Defence in depth: keep output inside base even if a caller passes a
+        # filename with path components.
+        dest = base / Path(filename).name
         self._doc.save(str(dest))
 
         # Auto-copy to ~/Downloads (skipped in server mode — interns
         # fetch via /api/jobs/{id}/download, not from the host's disk).
         if not config.DISABLE_DOWNLOADS_COPY:
-            dl_path = Path(config.DOWNLOADS_DIR) / filename
+            dl_path = Path(config.DOWNLOADS_DIR) / dest.name
             shutil.copy2(dest, dl_path)
 
         return dest
