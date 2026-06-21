@@ -51,8 +51,9 @@ install 完之後重啟 terminal、開 Claude Code，就能用了。
 | ffmpeg | 建議 | STT 音檔切片（>4 分鐘音檔） | Mac：`brew install ffmpeg`；Linux：`apt install ffmpeg` |
 | [Claude Code](https://docs.anthropic.com/claude-code) | **必要** | 跑 skills | 跟官網裝 |
 | OpenAI API key | 部分功能用 | STT + DALL-E | 申請 [platform.openai.com](https://platform.openai.com/api-keys)，install 時會問你 |
+| Anthropic API key | **選填** | 只用於 `fcc-translation` 翻譯加速 | 申請 [console.anthropic.com](https://console.anthropic.com/settings/keys)，自己編 `.env` |
 
-`ANTHROPIC_API_KEY` 不需要 —— Claude Code 本身就是 Claude，skill 在 Claude Code session 內跑，不另外叫 API。
+**`ANTHROPIC_API_KEY` 只用於翻譯**：填了，`fcc-translation` 走獨立 Haiku 呼叫，速度快、token 成本低；**留空（或不設）則自動改用 Claude Code session 內翻譯，結果相同但很吃 token**。其餘 6 個 skill 都不需要這把 key —— 它們本來就在 Claude Code session 內跑，不另外叫 API。
 
 ---
 
