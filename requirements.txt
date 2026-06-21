@@ -12,6 +12,10 @@ financedatabase==2.3.1
 # OpenAI — STT (gpt-4o-transcribe) + DALL-E 3
 openai==2.30.0
 
+# Anthropic — only fcc-translation's optional Haiku path (scripts/translate_cli.py),
+# used when ANTHROPIC_API_KEY is set. Skills otherwise run inside Claude Code.
+anthropic==0.111.0
+
 # .env loader
 python-dotenv==1.2.2
 

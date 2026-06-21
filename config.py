@@ -1,13 +1,22 @@
 """
 config.py — Word/PPTX format settings and output paths.
 
-All LLM call sites were removed when the project migrated from LangGraph
-agents to Claude Code Skills (May 2026). Skills run inside a Claude Code
-session and don't instantiate their own Anthropic clients, so model IDs
-and API keys no longer live here. STT/DALL-E still use OPENAI_API_KEY
-(loaded from .env in utils/stt.py and scripts/build_pptx_cli.py).
+Almost all LLM call sites were removed when the project migrated from
+LangGraph agents to Claude Code Skills (May 2026); skills run inside a Claude
+Code session and don't instantiate their own Anthropic clients. The one
+exception is LLM_FAST below — fcc-translation's optional Haiku path
+(scripts/translate_cli.py) uses it when ANTHROPIC_API_KEY is set. STT/DALL-E
+still use OPENAI_API_KEY (loaded from .env in utils/stt.py and
+scripts/build_pptx_cli.py).
 """
 import os
+
+# ── Translation skill — optional Haiku acceleration path ──────────────────────
+# fcc-translation calls scripts/translate_cli.py first; when ANTHROPIC_API_KEY
+# is set it translates the whole article in one Haiku call instead of going
+# paragraph-by-paragraph inside the (Opus) Claude Code session. No other skill
+# uses this.
+LLM_FAST = "claude-haiku-4-5-20251001"
 
 # ── Font ──────────────────────────────────────────────────────────────────────
 FONT_NAME = "微軟正黑體"

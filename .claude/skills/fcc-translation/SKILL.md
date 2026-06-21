@@ -27,7 +27,30 @@ description: 將外文文章（英文 / 日文 / 越南文等）翻譯成繁體�
 
 ---
 
-## Step 2 — 翻譯
+## Step 2 — 翻譯（先試加速路徑，失敗才降級）
+
+翻譯有兩條路徑。**先試加速路徑**；只有它回報沒 key（或失敗）才走降級路徑逐段翻。
+
+### 加速路徑（有 ANTHROPIC_API_KEY 時，省 token）
+
+把 body_text 寫到 `/tmp/<safe_name>_body.txt`，呼叫：
+
+```bash
+python3 "$FCC_MAS_HOME/scripts/translate_cli.py" \
+    --title "<原文 title>" --source "<source>" \
+    --body-file /tmp/<safe_name>_body.txt \
+    --pub-date "<YYYY-MM-DD 或省略>" --date "<task_date>" --intern "<intern>"
+```
+
+腳本會一次 Haiku 呼叫翻完、直接產出 docx。依 exit code 決定：
+
+- **exit 0** → 完成。stdout 就是 .docx 路徑，回報給使用者。**跳過 Step 3、Step 4**（腳本已產檔）。
+- **exit 3** → 未設 ANTHROPIC_API_KEY。對使用者明講一句：「未偵測到 ANTHROPIC_API_KEY，改用 session 內翻譯（較耗 token）」，然後走下面的【降級路徑】+ Step 3 + Step 4。
+- **其他非 0** → 腳本失敗（例：Haiku 回傳壞 JSON）。提一句腳本失敗，同樣改走【降級路徑】。
+
+> 加速路徑不處理 OCR / URL：圖片、PDF、網址的內文擷取仍由你在 session 內用 Read tool / WebFetch 完成（見下方「圖片 / PDF 處理」），擷取出純文字後再餵給腳本。
+
+### 降級路徑（無 key 或腳本失敗時）
 
 逐段翻譯成繁體中文。規則：
 
@@ -48,7 +71,9 @@ description: 將外文文章（英文 / 日文 / 越南文等）翻譯成繁體�
 
 ---
 
-## Step 3 — 智能複查
+## Step 3 — 智能複查（降級路徑才需要）
+
+> 走加速路徑（translate_cli.py exit 0）時跳過本步——Haiku prompt 內已含自檢。
 
 寫完逐段翻譯後逐條過：
 
@@ -70,7 +95,7 @@ description: 將外文文章（英文 / 日文 / 越南文等）翻譯成繁體�
 
 ---
 
-## Step 4 — 寫 build_docx spec
+## Step 4 — 寫 build_docx spec（降級路徑才需要）
 
 Translation 的 meta_text 是**兩行**特殊格式：
 
