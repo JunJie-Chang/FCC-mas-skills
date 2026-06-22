@@ -120,7 +120,7 @@ description: 對個人（高管、董事、創辦人、政商人物）做背景�
 寫到 `/tmp/<safe_name>_spec.json`，然後：
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
 ```
 
 告知使用者輸出路徑（`output/adhoc/` 與 `~/Downloads/`）。

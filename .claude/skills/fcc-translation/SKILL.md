@@ -36,7 +36,7 @@ description: 將外文文章（英文 / 日文 / 越南文等）翻譯成繁體�
 把 body_text 寫到 `/tmp/<safe_name>_body.txt`，呼叫：
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/translate_cli.py" \
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/translate_cli.py" \
     --title "<原文 title>" --source "<source>" \
     --body-file /tmp/<safe_name>_body.txt \
     --pub-date "<YYYY-MM-DD 或省略>" --date "<task_date>" --intern "<intern>"
@@ -137,7 +137,7 @@ Translation 的 meta_text 是**兩行**特殊格式：
 寫到 `/tmp/<safe_name>_spec.json`，然後：
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
 ```
 
 ---

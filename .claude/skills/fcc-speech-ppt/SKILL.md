@@ -26,7 +26,7 @@ description: 從 CY 的演講口述稿生成 FCC Partners 格式 .pptx（深藍�
 ### STT（若需要）
 
 ```bash
-python3.13 -c "
+"${FCC_MAS_PY:-python3}" -c "
 import sys
 import os; sys.path.insert(0, os.environ.get('FCC_MAS_HOME', os.path.expanduser('~/.fcc-mas')))
 from utils.stt import transcribe
@@ -139,7 +139,7 @@ print(transcribe('<audio_path>'))
 寫到 `/tmp/<safe_name>_pptx_spec.json`，然後：
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_pptx_cli.py" --spec /tmp/<safe_name>_pptx_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_pptx_cli.py" --spec /tmp/<safe_name>_pptx_spec.json
 ```
 
 CLI 回傳 JSON：

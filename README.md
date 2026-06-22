@@ -126,8 +126,8 @@ rm -rf ~/.fcc-mas
 # 2. 移除 skills symlink
 rm ~/.claude/skills/fcc-{shared,company-info,person-info,translation,dictation,verbal-cleanup,podcast,speech-ppt}
 
-# 3. 從 shell rc 刪掉 FCC_MAS_HOME 那行
-# 編輯 ~/.zshrc 或 ~/.bashrc，刪掉 'export FCC_MAS_HOME=...' 那行
+# 3. 從 shell rc 刪掉 FCC_MAS_HOME / FCC_MAS_PY 兩行
+# 編輯 ~/.zshrc 或 ~/.bashrc，刪掉 'export FCC_MAS_HOME=...' 與 'export FCC_MAS_PY=...'
 ```
 
 ---
@@ -141,7 +141,12 @@ rm ~/.claude/skills/fcc-{shared,company-info,person-info,translation,dictation,v
 Skills 在新 session 啟動時掃描 `~/.claude/skills/`。**重啟 Claude Code** 後就會看到。
 
 ### 「ModuleNotFoundError: No module named 'docx'」
-`pip install` 沒成功，看 `/tmp/fcc-mas-pip.log`。常見原因：Python 版本 < 3.10、`pip` 是別的 Python。重跑 installer 應該會提示。
+依賴裝在 `~/.fcc-mas/.venv` 這個 venv 裡。看 `/tmp/fcc-mas-pip.log`。常見原因：
+- **`python3-venv` 沒裝**（Debian/Ubuntu/WSL）→ `sudo apt install python3-venv` 再重跑 installer。
+- Python 版本 < 3.10。
+- 在 Claude session 內手動抓財務資料時報這個錯 → 多半是 shell 還沒 source、`FCC_MAS_PY` 沒生效，導致 fallback 到系統 `python3`（沒這些套件）。`source ~/.zshrc`（或重啟 terminal）即可。
+
+> 註：以前版本用 `pip install --user`，在 Debian/WSL 上會踩 PEP 668（externally-managed）和 odfpy build 失敗（`install_layout`）。改用 venv 後這些都不會再發生。
 
 ### STT 或 DALL-E 沒反應
 缺 `OPENAI_API_KEY`。編輯 `~/.fcc-mas/.env` 加上 key（格式參考 `.env.example`）。
@@ -165,9 +170,9 @@ Claude Code 比對 description 自動觸發 fcc-company-info
     ↓
 Claude 照 SKILL.md 步驟跑：
     ├─ WebSearch / tavily-search 找一手資料
-    ├─ Bash 呼叫 python3 $FCC_MAS_HOME/utils/financial_tools.py（yfinance）
+    ├─ Bash 呼叫 $FCC_MAS_PY $FCC_MAS_HOME/utils/financial_tools.py（yfinance）
     ├─ 自我複查（高風險數字 fact-check）
-    └─ Bash 呼叫 python3 $FCC_MAS_HOME/scripts/build_docx_cli.py（產 .docx）
+    └─ Bash 呼叫 $FCC_MAS_PY $FCC_MAS_HOME/scripts/build_docx_cli.py（產 .docx）
 ```
 
 所有 LLM 呼叫都是 Claude Code session 自己的 Claude（無外部 Anthropic API call），可即時自我複查。Python helpers 只做確定性工作（檔案 I/O、HTTP 抓資料、Word / PPT 渲染）。

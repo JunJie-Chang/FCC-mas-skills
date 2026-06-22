@@ -45,15 +45,19 @@ output/{adhoc,daily,weekly}/    # generated files (gitignored)
 
 ## Environment
 
-- **Python 3.10–3.13** (installer picks one; 3.13 recommended). Packages
-  install into that interpreter; the `.venv/` dir is not used.
+- **Python 3.10–3.13** (installer picks one; 3.13 recommended). `install.sh`
+  creates a dedicated virtualenv at `$FCC_MAS_HOME/.venv` and installs all
+  deps there — never into system / `--user` site-packages. This dodges PEP 668
+  on Debian/WSL pythons and the odfpy source-build failure under Debian
+  setuptools. The CLIs auto-re-exec under that venv (`utils/venv_bootstrap.py`),
+  and `$FCC_MAS_PY` (exported by the installer) points at its interpreter.
 - **`.env`** holds only `OPENAI_API_KEY` (STT + DALL-E). No Anthropic /
   Tavily keys — Tavily search is done via Claude's own tools, not here.
 
 ## Build pipeline (how a report is produced)
 
 1. A skill gathers facts (Claude + web tools) and assembles a **JSON spec**.
-2. It shells out: `python3 scripts/build_docx_cli.py --spec /tmp/x.json`.
+2. It shells out: `"${FCC_MAS_PY:-python3}" scripts/build_docx_cli.py --spec /tmp/x.json`.
 3. `WordBuilder` renders blocks (heading / paragraph / bullet / table /
    keyed_info / references …) into a `.docx` under `output/<subdir>/` and
    copies it to `~/Downloads` (unless `FCC_DISABLE_DOWNLOADS_COPY=1`).
@@ -75,6 +79,8 @@ basenamed (`utils/spec_io.py`) — a spec cannot write outside `output/`.
   `{"error": ...}` rather than raise; cost logging never breaks a task.
 - Helper diagnostics go to **stderr** — stdout is reserved for the JSON /
   path the skills parse.
-- Skill commands should call `python3` (not a hardcoded `python3.13`).
-- `utils/unit_convert.py` has a 28-case self-test (`python3 utils/unit_convert.py`);
+- Skill commands should call `"${FCC_MAS_PY:-python3}"` (the venv interpreter,
+  falling back to `python3`) — not a hardcoded `python3.13`. The CLIs also
+  self-heal into the venv via `utils/venv_bootstrap.py`.
+- `utils/unit_convert.py` has a 28-case self-test (`"$FCC_MAS_PY" utils/unit_convert.py`);
   add a case when you touch scale/currency logic.

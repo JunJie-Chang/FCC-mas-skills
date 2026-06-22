@@ -36,6 +36,11 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
+# Re-exec under the repo venv ($FCC_MAS_HOME/.venv) when launched with a bare
+# python3. Must run before any third-party import. See utils/venv_bootstrap.
+from utils.venv_bootstrap import activate as _activate_venv  # noqa: E402
+_activate_venv(_REPO)
+
 import config  # noqa: E402
 from scripts.build_docx_cli import build  # noqa: E402
 

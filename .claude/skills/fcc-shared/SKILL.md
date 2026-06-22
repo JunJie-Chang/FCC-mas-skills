@@ -53,7 +53,7 @@ description: FCC Partners 研究報告共通規則 — 寫作禁忌、Word 格�
 
 ## Word 輸出（build_docx_cli.py spec）
 
-所有報告用 `python3.13 scripts/build_docx_cli.py --spec <path>` 產出 .docx。
+所有報告用 `"${FCC_MAS_PY:-python3}" scripts/build_docx_cli.py --spec <path>` 產出 .docx。
 
 ### Spec JSON shape
 

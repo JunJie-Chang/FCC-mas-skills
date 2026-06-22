@@ -10,7 +10,7 @@ CY（老闆）口述指令 → Claude Code session 內讀 skill → 執行（搜
 **架構演進**：2026 年 5 月之前是 LangGraph + FastAPI 多 agent 系統；之後重構成 Claude Code Skills（純本機、無 API 後端、單人 Claude Code 使用）。重構紀錄見 `/Users/junjie/.claude/plans/skills-api-skills-person-info-company-i-federated-aurora.md`。
 
 ## Environment
-- **Python**：system Python 3.13 (`/Library/Frameworks/Python.framework/Versions/3.13`)
+- **Python**：依賴裝在專屬 venv `$FCC_MAS_HOME/.venv`（`install.sh` 建立，Python 3.10–3.13）。不裝進 system / `--user` site-packages —— 這樣避開 Debian/WSL 的 PEP 668 與 odfpy 原始碼 build 失敗（`install_layout`）。CLI 會經 `utils/venv_bootstrap.py` 自動 re-exec 進這個 venv；`$FCC_MAS_PY` 指向它的直譯器（skill 內呼叫一律用 `"${FCC_MAS_PY:-python3}"`）。
 - `.env`：只需 `OPENAI_API_KEY`（STT + DALL-E 用）。`ANTHROPIC_API_KEY` 不再需要（Claude 在 Claude Code session 內執行）。`TAVILY_API_KEY` 不再需要（skill 直接呼叫 `tavily-*` skill 或 WebSearch 工具）。
 - 所有 `load_dotenv()` 必須用 `override=True`，否則 shell 中已有空字串的 env var 會擋住 `.env` 的值
 - **系統依賴**：`ffmpeg` / `ffprobe`（STT 對 >4 分鐘音檔切片用，見 `utils/stt.py`）；未安裝時長音檔轉錄會失敗（`brew install ffmpeg`）
@@ -38,11 +38,11 @@ Skills 透過 Bash 呼叫這些 helper。**不要在 skill 內重新實作這些
 
 | 路徑 | 用途 |
 |---|---|
-| `scripts/build_docx_cli.py` | JSON spec → `.docx`（內部用 WordBuilder）。`python3.13 scripts/build_docx_cli.py --spec /tmp/spec.json` |
+| `scripts/build_docx_cli.py` | JSON spec → `.docx`（內部用 WordBuilder）。`"${FCC_MAS_PY:-python3}" scripts/build_docx_cli.py --spec /tmp/spec.json` |
 | `scripts/build_pptx_cli.py` | JSON spec → `.pptx`（含 DALL-E 圖片可選）。Self-contained，沒依賴 deprecated agent file |
 | `formatters/word_formatter.py` | WordBuilder — 統一 Word 格式（A4、微軟正黑體 14pt、Private & Confidential 頁眉、頁碼、Table Grid 表格） |
 | `utils/file_naming.py` | `general(task_name, intern_name, task_date, ext='docx')` → `YYYY.MM.DD_TaskName_Intern.docx` |
-| `utils/unit_convert.py` | 中文金額確定性轉換（億 / 兆 / 萬）。Self-test：`python3.13 utils/unit_convert.py`（28 cases，需全過） |
+| `utils/unit_convert.py` | 中文金額確定性轉換（億 / 兆 / 萬）。Self-test：`"$FCC_MAS_PY" utils/unit_convert.py`（28 cases，需全過） |
 | `utils/financial_tools.py` | yfinance + FinanceDatabase fetchers。`fetch_all(ticker, tools=[...])` 是主要進入點。**Skill 自己解 ticker 後傳入**；本模組不再用 Haiku normalizer |
 | `utils/stt.py` | OpenAI gpt-4o-transcribe（中文同音字辨識優於 whisper-1） |
 | `assets/ppt_chrome_template.pptx` | PPT chrome（深藍漸層、底線、logo、頁碼 placeholder）。`build_pptx_cli.py` 自動 inherit |
