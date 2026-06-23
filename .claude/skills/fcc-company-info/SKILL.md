@@ -61,7 +61,7 @@ description: 對公司、機構、品牌或產業競品做深度研究，輸出 
 若需要，呼叫：
 
 ```bash
-python3.13 -c "
+"${FCC_MAS_PY:-python3}" -c "
 import sys, json
 import os; sys.path.insert(0, os.environ.get('FCC_MAS_HOME', os.path.expanduser('~/.fcc-mas')))
 from utils.financial_tools import fetch_all
@@ -138,7 +138,7 @@ report 內文是否不小心提到指令措辭（「您指示」「本任務」�
 寫到 `/tmp/<safe_name>_spec.json`，然後：
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
 ```
 
 CLI 印出絕對路徑。告知使用者：

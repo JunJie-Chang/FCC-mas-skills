@@ -22,7 +22,7 @@ description: 把 CY 的口述錄音清稿成乾淨的繁體中文書面稿，輸
 若 `--audio <path>`：
 
 ```bash
-python3.13 -c "
+"${FCC_MAS_PY:-python3}" -c "
 import sys
 import os; sys.path.insert(0, os.environ.get('FCC_MAS_HOME', os.path.expanduser('~/.fcc-mas')))
 from utils.stt import transcribe
@@ -120,7 +120,7 @@ print(transcribe('<audio_path>'))
 ```
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
 ```
 
 ---

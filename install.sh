@@ -123,13 +123,44 @@ else
   ok "Cloned"
 fi
 
-# ── 3. Install Python dependencies ──────────────────────────────────────────
+# ── 3. Install Python dependencies (into a dedicated venv) ──────────────────
 
 header "3. Installing Python dependencies"
 
-# Use --user to avoid sudo; quiet output but show errors.
-if "$PY_BIN" -m pip install --user --upgrade -r "$INSTALL_DIR/requirements.txt" >/tmp/fcc-mas-pip.log 2>&1; then
-  ok "Dependencies installed (log: /tmp/fcc-mas-pip.log)"
+# Why a venv instead of `pip install --user`:
+#   • Debian/Ubuntu/WSL system pythons are PEP 668 "externally-managed" — a
+#     plain --user install errors out (or needs --break-system-packages).
+#   • One transitive dep (odfpy, via financedatabase → pandas[excel]) ships no
+#     wheel and must build from sdist. Under the Debian-patched system
+#     setuptools that build dies with `AttributeError: install_layout`. A clean
+#     venv with up-to-date pip/setuptools/wheel builds it without a hitch.
+#   • Keeps the user's global/site packages (e.g. pandas) untouched.
+# The skill CLIs auto-re-exec under this venv (see utils/venv_bootstrap.py), so
+# nothing needs to be "activated" at runtime.
+
+VENV_DIR="$INSTALL_DIR/.venv"
+VENV_PY="$VENV_DIR/bin/python"
+
+if [[ ! -x "$VENV_PY" ]]; then
+  say "Creating virtualenv at $VENV_DIR"
+  if ! "$PY_BIN" -m venv "$VENV_DIR" 2>/tmp/fcc-mas-pip.log; then
+    cat /tmp/fcc-mas-pip.log
+    fail "Could not create venv. Install the venv module: $([[ $OS == mac ]] && echo 'brew install python' || echo 'sudo apt install python3-venv')"
+  fi
+  ok "venv created"
+else
+  ok "venv already exists at $VENV_DIR"
+fi
+
+say "Upgrading pip / setuptools / wheel in venv"
+if ! "$VENV_PY" -m pip install --quiet --upgrade pip setuptools wheel >/tmp/fcc-mas-pip.log 2>&1; then
+  cat /tmp/fcc-mas-pip.log
+  fail "Failed to bootstrap pip/setuptools/wheel — see log above"
+fi
+
+say "Installing requirements (this can take a few minutes)"
+if "$VENV_PY" -m pip install --upgrade -r "$INSTALL_DIR/requirements.txt" >>/tmp/fcc-mas-pip.log 2>&1; then
+  ok "Dependencies installed into $VENV_DIR (log: /tmp/fcc-mas-pip.log)"
 else
   cat /tmp/fcc-mas-pip.log
   fail "pip install failed — see log above"
@@ -186,11 +217,16 @@ else
   fi
 fi
 
-# ── 6. Add FCC_MAS_HOME to shell rc ─────────────────────────────────────────
+# ── 6. Add FCC_MAS_HOME / FCC_MAS_PY to shell rc ────────────────────────────
 
-header "6. Setting FCC_MAS_HOME in shell"
+header "6. Setting FCC_MAS_HOME / FCC_MAS_PY in shell"
 
-EXPORT_LINE="export FCC_MAS_HOME=\"\$HOME/.fcc-mas\"   # FCC-mas skills"
+# FCC_MAS_HOME — repo root.  FCC_MAS_PY — the venv interpreter the skills run
+# their CLIs with (docs use "${FCC_MAS_PY:-python3}"; the CLIs also self-heal
+# via utils/venv_bootstrap, but the inline financial-data call in
+# fcc-company-info needs FCC_MAS_PY to hit the venv directly).
+EXPORT_HOME="export FCC_MAS_HOME=\"\$HOME/.fcc-mas\"   # FCC-mas skills"
+EXPORT_PY="export FCC_MAS_PY=\"\$HOME/.fcc-mas/.venv/bin/python\"   # FCC-mas venv python"
 
 if grep -Fq "FCC_MAS_HOME" "$SHELL_RC" 2>/dev/null; then
   ok "FCC_MAS_HOME already in $SHELL_RC"
@@ -198,13 +234,21 @@ else
   {
     echo ""
     echo "# Added by FCC-mas install.sh on $(date '+%Y-%m-%d')"
-    echo "$EXPORT_LINE"
+    echo "$EXPORT_HOME"
   } >> "$SHELL_RC"
   ok "Added FCC_MAS_HOME to $SHELL_RC"
 fi
 
+if grep -Fq "FCC_MAS_PY" "$SHELL_RC" 2>/dev/null; then
+  ok "FCC_MAS_PY already in $SHELL_RC"
+else
+  echo "$EXPORT_PY" >> "$SHELL_RC"
+  ok "Added FCC_MAS_PY to $SHELL_RC"
+fi
+
 # Export now for the smoke test
 export FCC_MAS_HOME="$INSTALL_DIR"
+export FCC_MAS_PY="$VENV_PY"
 
 # ── 7. Smoke test ───────────────────────────────────────────────────────────
 
@@ -228,7 +272,7 @@ cat > "$TEST_SPEC" <<'JSON'
 }
 JSON
 
-if OUTPUT=$("$PY_BIN" "$INSTALL_DIR/scripts/build_docx_cli.py" --spec "$TEST_SPEC" 2>&1); then
+if OUTPUT=$("$VENV_PY" "$INSTALL_DIR/scripts/build_docx_cli.py" --spec "$TEST_SPEC" 2>&1); then
   rm -f "$TEST_SPEC"
   ok "Built test doc: $OUTPUT"
 else

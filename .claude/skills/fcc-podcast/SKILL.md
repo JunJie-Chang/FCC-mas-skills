@@ -70,7 +70,7 @@ youtube.com, youtu.be, linkedin.com
 ### 全文抓取三層 cascade
 
 對通過 domain 過濾的 URL：
-1. 首選 trafilatura（純文字、無 boilerplate） — 透過 `tavily-extract` skill 或 `python3.13 -c "import trafilatura; ..."` 跑
+1. 首選 trafilatura（純文字、無 boilerplate） — 透過 `tavily-extract` skill 或 `"${FCC_MAS_PY:-python3}" -c "import trafilatura; ..."` 跑
 2. 失敗 → tavily-extract markdown 模式
 3. 失敗 → 用搜尋結果的 snippet
 
@@ -128,7 +128,7 @@ YYYY.MM.DD_<intern>_<媒體簡稱>_<作者（如有）>
 缺欄位用空字串接續省略（例：作者不明：`2024.09.18_Justin_Bloomberg`）。
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
 ```
 
 ---

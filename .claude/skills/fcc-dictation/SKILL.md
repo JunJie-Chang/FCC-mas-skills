@@ -34,7 +34,7 @@ description: 把 CY 的會議錄音或會議口述整理成正式會議紀錄（
 若使用者給 `--audio <path>`：
 
 ```bash
-python3.13 -c "
+"${FCC_MAS_PY:-python3}" -c "
 import sys
 import os; sys.path.insert(0, os.environ.get('FCC_MAS_HOME', os.path.expanduser('~/.fcc-mas')))
 from utils.stt import transcribe
@@ -133,7 +133,7 @@ Title 跟一般 docx 不同 — **日期內嵌在 title** 用斜線，且**不�
 - task_name 不含日期前綴（CLI 會自動加 `YYYY.MM.DD_`）
 
 ```bash
-python3 "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
+"${FCC_MAS_PY:-python3}" "$FCC_MAS_HOME/scripts/build_docx_cli.py" --spec /tmp/<safe_name>_spec.json
 ```
 
 ---
